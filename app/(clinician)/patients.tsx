@@ -1,6 +1,6 @@
 import { useRouter } from 'expo-router';
 import React, { useMemo } from 'react';
-import { Pressable, View } from 'react-native';
+import { Pressable, useWindowDimensions, View } from 'react-native';
 import { relativeDay } from '../../src/domain/date';
 import {
   adherenceRate,
@@ -8,8 +8,9 @@ import {
   nextAppointment,
   patientsOf,
   programFor,
-  riskLevel,
   RiskLevel,
+  triage,
+  unreadCount,
 } from '../../src/domain/selectors';
 import { useStore } from '../../src/store';
 import { space, useTheme } from '../../src/theme';
@@ -34,20 +35,24 @@ export default function PatientsScreen() {
   const { state, selectPatient } = useStore();
   const router = useRouter();
   const { colors } = useTheme();
+  const { width } = useWindowDimensions();
+  const columns = width >= 1100 ? 2 : 1;
 
   const rows = useMemo(() => {
     return patientsOf(state, state.currentClinicianId)
       .map((patient) => {
-        const risk = riskLevel(state, patient.id);
+        const t = triage(state, patient.id);
         const week = adherenceSeries(state, patient.id, 7);
         const month = adherenceSeries(state, patient.id, 30);
         return {
           patient,
-          risk,
+          risk: t.level,
+          reason: t.reason,
           weekRate: adherenceRate(week),
           month,
           program: programFor(state, patient.id),
           next: nextAppointment(state, patient.id),
+          unread: unreadCount(state, patient.id, 'clinician'),
         };
       })
       .sort(
@@ -85,7 +90,7 @@ export default function PatientsScreen() {
         </T>
         <Spacer h={space.xs} />
         <T variant="body" tone="muted">
-          Ranked by 7-day adherence — the window where a call still changes the outcome.
+          Ranked by 7-day adherence, and by any outcome measure that has moved the wrong way — a patient doing the work and getting worse is ranked up, not buried.
         </T>
       </Card>
 
@@ -93,10 +98,14 @@ export default function PatientsScreen() {
       {rows.length === 0 ? (
         <EmptyState title="No patients yet" body="Patients you onboard will appear here." />
       ) : (
-        <Stack gap={space.md}>
-          {rows.map(({ patient, risk, weekRate, month, program, next }) => (
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.md }}>
+          {rows.map(({ patient, risk, reason, month, next, unread }) => (
             <Card
               key={patient.id}
+              // Two per row once there is width for it — a desktop caseload as
+              // a single narrow column wastes the screen the clinician chose to
+              // work on and pushes patients below the fold for no reason.
+              style={columns === 2 ? { width: `calc(50% - ${space.md / 2}px)` as any } : { width: '100%' }}
               onPress={() => {
                 selectPatient(patient.id);
                 router.push(`/patient/${patient.id}`);
@@ -109,13 +118,16 @@ export default function PatientsScreen() {
                   <Row gap={space.sm} style={{ flexWrap: 'wrap' }}>
                     <T variant="heading">{patient.name}</T>
                     <Pill label={RISK_META[risk].label} tone={RISK_META[risk].tone} />
+                    {unread > 0 && <Pill label={`${unread} unread`} tone="accent" />}
                   </Row>
                   <T variant="body" tone="muted" numberOfLines={1}>
                     {patient.condition}
                   </T>
                   <Row gap={space.md} style={{ marginTop: space.xs, flexWrap: 'wrap' }}>
-                    <T variant="caption" tone="faint">
-                      {weekRate === null ? 'No data' : `${Math.round(weekRate * 100)}% this week`}
+                    {/* Why this patient sits where they do — a risk badge with
+                        no reason just moves the guesswork downstream. */}
+                    <T variant="caption" tone={risk === 'on-track' ? 'faint' : 'warn'}>
+                      {reason}
                     </T>
                     {next && (
                       <T variant="caption" tone="faint">
@@ -132,7 +144,7 @@ export default function PatientsScreen() {
               </Row>
             </Card>
           ))}
-        </Stack>
+        </View>
       )}
       <View style={{ height: space.xl }} />
     </Screen>

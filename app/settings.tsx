@@ -3,8 +3,13 @@ import React from 'react';
 import { Platform, Pressable, View } from 'react-native';
 import { useStore } from '../src/store';
 import { space, useTheme } from '../src/theme';
-import { Avatar, Button, Card, Divider, Row, Screen, SectionHeader, Spacer, Stack, T } from '../src/ui';
+import { Avatar, Button, Card, Divider, Row, Screen, SectionHeader, Segmented, Spacer, Stack, T } from '../src/ui';
+import { remindersSupported } from '../src/store/reminders';
 import { Icon } from '../src/ui/icons';
+
+/** Sensible hour choices per bucket — a full 24-hour picker is more control
+ *  than anyone wants for a reminder. */
+const HOURS = { morning: [7, 8, 9, 10], midday: [12, 13, 14], evening: [18, 19, 20, 21] } as const;
 
 /**
  * In production the role comes from the account, not a switch. It is exposed
@@ -12,7 +17,7 @@ import { Icon } from '../src/ui/icons';
  * one evaluating it should need two devices to see both sides.
  */
 export default function SettingsScreen() {
-  const { state, setRole, selectPatient, reset } = useStore();
+  const { state, setRole, selectPatient, reset, setReminders } = useStore();
   const router = useRouter();
   const { colors } = useTheme();
 
@@ -79,6 +84,59 @@ export default function SettingsScreen() {
             {i < state.patients.length - 1 && <Divider />}
           </View>
         ))}
+      </Card>
+
+      <SectionHeader title="Reminders" />
+      <Card>
+        <Stack gap={space.lg}>
+          <Row style={{ justifyContent: 'space-between' }}>
+            <Stack gap={2} style={{ flex: 1 }}>
+              <T variant="heading">Daily nudges</T>
+              <T variant="caption" tone="faint">
+                {remindersSupported
+                  ? 'One reminder per part of the day you actually have items in.'
+                  : 'Notifications are not available in the browser — install the app to receive them.'}
+              </T>
+            </Stack>
+            <Button
+              label={state.reminders.enabled ? 'On' : 'Off'}
+              kind={state.reminders.enabled ? 'primary' : 'secondary'}
+              disabled={!remindersSupported}
+              onPress={() => setReminders({ ...state.reminders, enabled: !state.reminders.enabled })}
+            />
+          </Row>
+
+          {state.reminders.enabled && remindersSupported && (
+            <>
+              {(['morning', 'midday', 'evening'] as const).map((bucket) => (
+                <Stack key={bucket} gap={space.sm}>
+                  <T variant="caption" tone="faint">
+                    {bucket.toUpperCase()}
+                  </T>
+                  <Segmented
+                    options={HOURS[bucket].map((h) => ({ value: String(h), label: `${h}:00`.padStart(5, '0') }))}
+                    value={String(state.reminders[bucket])}
+                    onChange={(v) => setReminders({ ...state.reminders, [bucket]: Number(v) })}
+                  />
+                </Stack>
+              ))}
+              <Stack gap={space.sm}>
+                <T variant="caption" tone="faint">
+                  BEFORE AN APPOINTMENT
+                </T>
+                <Segmented
+                  options={[
+                    { value: '2', label: '2 hours' },
+                    { value: '24', label: '1 day' },
+                    { value: '48', label: '2 days' },
+                  ]}
+                  value={String(state.reminders.appointmentLeadHours)}
+                  onChange={(v) => setReminders({ ...state.reminders, appointmentLeadHours: Number(v) })}
+                />
+              </Stack>
+            </>
+          )}
+        </Stack>
       </Card>
 
       <SectionHeader title="Demo data" />

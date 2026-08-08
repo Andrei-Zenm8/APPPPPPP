@@ -1,7 +1,17 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { today } from '../domain/date';
-import type { AppState, Appointment, ISODate, LogEntry, Prescription, Role } from '../domain/types';
+import type {
+  AppState,
+  Appointment,
+  ISODate,
+  LogEntry,
+  Message,
+  Prescription,
+  ReminderSettings,
+  Role,
+  SkipReason,
+} from '../domain/types';
 import { buildSeed } from './seed';
 
 /**
@@ -14,7 +24,9 @@ import { buildSeed } from './seed';
  * public surface is the API contract.
  */
 
-const STORAGE_KEY = 'apol.state.v1';
+const STORAGE_KEY = 'apol.state.v2';
+/** Set once the user has logged anything of their own; gates the demo refresh. */
+const TOUCHED_KEY = 'apol.touched.v1';
 
 interface StoreValue {
   state: AppState;
@@ -30,6 +42,15 @@ interface StoreValue {
     value?: number;
     note?: string;
   }) => void;
+  /** Record an explicit "couldn't do this, and here's why". */
+  skipTask: (args: {
+    patientId: string;
+    prescriptionId: string;
+    date: ISODate;
+    occurrence: number;
+    reason: SkipReason;
+    note?: string;
+  }) => void;
   recordMeasurement: (args: {
     patientId: string;
     prescriptionId: string;
@@ -38,7 +59,11 @@ interface StoreValue {
     value: number;
   }) => void;
   addPrescription: (rx: Omit<Prescription, 'id'>) => void;
-  removePrescription: (id: string) => void;
+  /** Stops a prescription from today forward without touching its history. */
+  discontinuePrescription: (id: string) => void;
+  sendMessage: (args: { patientId: string; from: Role; body: string }) => void;
+  markThreadRead: (patientId: string, role: Role) => void;
+  setReminders: (r: ReminderSettings) => void;
   addAppointment: (apt: Omit<Appointment, 'id' | 'status'>) => void;
   cancelAppointment: (id: string) => void;
   reset: () => void;
@@ -59,8 +84,19 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     let cancelled = false;
     (async () => {
       try {
-        const raw = await AsyncStorage.getItem(STORAGE_KEY);
-        if (!cancelled && raw) setState(JSON.parse(raw) as AppState);
+        const [raw, touched] = await Promise.all([
+          AsyncStorage.getItem(STORAGE_KEY),
+          AsyncStorage.getItem(TOUCHED_KEY),
+        ]);
+        if (!cancelled && raw) {
+          const stored = JSON.parse(raw) as AppState;
+          // The seed is anchored to the day it was built. Restoring it a week
+          // later would show adherence collapsing to zero with no explanation,
+          // so untouched demo data is rebuilt against today instead. Anything
+          // the user has actually logged is never discarded this way.
+          const stale = stored.logs.every((l) => l.date < today());
+          setState(touched !== '1' && stale ? buildSeed() : stored);
+        }
       } catch {
         // fall through to seed
       } finally {
@@ -82,7 +118,13 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(state)).catch(() => {});
   }, [state]);
 
+  /** Any mutation counts as the user making the data theirs. */
+  const markTouched = useCallback(() => {
+    AsyncStorage.setItem(TOUCHED_KEY, '1').catch(() => {});
+  }, []);
+
   const toggleTask = useCallback<StoreValue['toggleTask']>((args) => {
+    markTouched();
     setState((prev) => {
       const existing = prev.logs.find(
         (l) =>
@@ -96,9 +138,16 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         const logs = prev.logs.filter((l) => l.id !== existing.id);
         // Un-ticking a measurement must also retract the reading it produced,
         // or the progress chart keeps a data point the patient took back.
-        const readings = existing.value === undefined
-          ? prev.readings
-          : prev.readings.filter((r) => !(r.patientId === args.patientId && r.date === args.date && r.value === existing.value));
+        // Un-ticking a measurement retracts the reading it produced, matched on
+        // the prescription's own metric key — matching on value alone would
+        // delete the wrong metric when two share a value on the same day.
+        const metricKey = prev.prescriptions.find((r) => r.id === args.prescriptionId)?.metric?.key;
+        const readings =
+          existing.value === undefined || !metricKey
+            ? prev.readings
+            : prev.readings.filter(
+                (r) => !(r.patientId === args.patientId && r.key === metricKey && r.date === args.date),
+              );
         return { ...prev, logs, readings };
       }
 
@@ -115,9 +164,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       };
       return { ...prev, logs: [...prev.logs, entry] };
     });
-  }, []);
+  }, [markTouched]);
 
   const recordMeasurement = useCallback<StoreValue['recordMeasurement']>((args) => {
+    markTouched();
     setState((prev) => {
       const logs = prev.logs.filter(
         (l) => !(l.patientId === args.patientId && l.prescriptionId === args.prescriptionId && l.date === args.date),
@@ -156,27 +206,96 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       selectPatient: (currentPatientId) => setState((p) => ({ ...p, currentPatientId })),
       toggleTask,
       recordMeasurement,
-      addPrescription: (rx) =>
-        setState((p) => ({ ...p, prescriptions: [...p.prescriptions, { ...rx, id: uid('rx') }] })),
-      removePrescription: (id) =>
+      skipTask: (args) => {
+        markTouched();
         setState((p) => ({
           ...p,
-          prescriptions: p.prescriptions.filter((r) => r.id !== id),
-          logs: p.logs.filter((l) => l.prescriptionId !== id),
+          logs: [
+            ...p.logs.filter(
+              (l) =>
+                !(
+                  l.patientId === args.patientId &&
+                  l.prescriptionId === args.prescriptionId &&
+                  l.date === args.date &&
+                  l.occurrence === args.occurrence
+                ),
+            ),
+            {
+              id: uid('lg'),
+              patientId: args.patientId,
+              prescriptionId: args.prescriptionId,
+              date: args.date,
+              occurrence: args.occurrence,
+              status: 'skipped',
+              skipReason: args.reason,
+              note: args.note,
+              loggedAt: new Date().toISOString(),
+            },
+          ],
+        }));
+      },
+      addPrescription: (rx) => {
+        markTouched();
+        setState((p) => ({ ...p, prescriptions: [...p.prescriptions, { ...rx, id: uid('rx') }] }));
+      },
+      discontinuePrescription: (id) => {
+        markTouched();
+        // Ends the prescription from today rather than deleting it. Deleting
+        // would erase every log attached to it and silently rewrite the
+        // patient's past adherence — a clinical record must not do that.
+        setState((p) => ({
+          ...p,
+          prescriptions: p.prescriptions.map((r) => (r.id === id ? { ...r, endedOn: today() } : r)),
+        }));
+      },
+      sendMessage: ({ patientId, from, body }) => {
+        markTouched();
+        const msg: Message = {
+          id: uid('msg'),
+          patientId,
+          from,
+          body,
+          sentAt: new Date().toISOString(),
+          readByClinician: from === 'clinician',
+          readByPatient: from === 'patient',
+        };
+        setState((p) => ({ ...p, messages: [...p.messages, msg] }));
+      },
+      markThreadRead: (patientId, role) =>
+        setState((p) => ({
+          ...p,
+          messages: p.messages.map((m) =>
+            m.patientId === patientId
+              ? role === 'clinician'
+                ? { ...m, readByClinician: true }
+                : { ...m, readByPatient: true }
+              : m,
+          ),
         })),
-      addAppointment: (apt) =>
+      setReminders: (reminders) => {
+        markTouched();
+        setState((p) => ({ ...p, reminders }));
+      },
+      addAppointment: (apt) => {
+        markTouched();
         setState((p) => ({
           ...p,
           appointments: [...p.appointments, { ...apt, id: uid('apt'), status: 'scheduled' }],
-        })),
-      cancelAppointment: (id) =>
+        }));
+      },
+      cancelAppointment: (id) => {
+        markTouched();
         setState((p) => ({
           ...p,
           appointments: p.appointments.map((a) => (a.id === id ? { ...a, status: 'cancelled' } : a)),
-        })),
-      reset: () => setState(buildSeed()),
+        }));
+      },
+      reset: () => {
+        AsyncStorage.removeItem(TOUCHED_KEY).catch(() => {});
+        setState(buildSeed());
+      },
     }),
-    [state, ready, toggleTask, recordMeasurement],
+    [state, ready, toggleTask, recordMeasurement, markTouched],
   );
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;

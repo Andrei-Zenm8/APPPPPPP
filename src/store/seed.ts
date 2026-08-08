@@ -1,5 +1,5 @@
 import { addDays, today, toISODate } from '../domain/date';
-import type { AppState, LogEntry, MetricReading } from '../domain/types';
+import type { AppState, LogEntry, MetricReading, SkipReason } from '../domain/types';
 
 /**
  * Demo data. Apol is useless to evaluate on an empty database — adherence,
@@ -193,6 +193,18 @@ export function buildSeed(): AppState {
     ],
     logs: [],
     readings: [],
+    messages: [
+      {
+        id: 'msg-1',
+        patientId: 'pat-tom',
+        from: 'patient',
+        body: 'The dead bugs have been setting off my back the last few days, so I have been skipping them. Should I keep going?',
+        sentAt: at(-2, 19, 12),
+        readByClinician: false,
+        readByPatient: true,
+      },
+    ],
+    reminders: { enabled: true, morning: 8, midday: 13, evening: 20, appointmentLeadHours: 24 },
     appointments: [
       {
         id: 'apt-1',
@@ -277,7 +289,26 @@ function seedHistory(state: AppState) {
           // Today is deliberately left partly unlogged so the patient has
           // something real to tick off on first open.
           if (offset === 0 && rand() < 0.65) continue;
-          if (rand() > p) continue;
+
+          if (rand() > p) {
+            // Not everything undone is silently missed — some of it the patient
+            // actively declined, which is the far more useful signal. Seeded so
+            // the clinician's log shows real reasons, not a wall of "missed".
+            if (rand() < 0.35) {
+              const reasons: SkipReason[] = ['pain', 'no-time', 'forgot', 'unwell', 'no-equipment'];
+              logs.push({
+                id: `lg-${patient.id}-${rx.id}-${date}-${i}-s`,
+                patientId: patient.id,
+                prescriptionId: rx.id,
+                date,
+                occurrence: i,
+                status: 'skipped',
+                skipReason: reasons[Math.floor(rand() * reasons.length)],
+                loggedAt: new Date(`${date}T18:00:00`).toISOString(),
+              });
+            }
+            continue;
+          }
 
           const isMetric = rx.kind === 'measurement';
           let value: number | undefined;
@@ -309,6 +340,7 @@ function seedHistory(state: AppState) {
 
   state.logs = logs;
   state.readings = readings;
+  spikeRecentOutcome(state, 'pat-sara');
 }
 
 /** Pain falls as adherence holds; range of motion climbs. Noise keeps the
@@ -364,3 +396,31 @@ function mulberry32(seed: number) {
 }
 
 export const _internal = { toISODate };
+
+
+/**
+ * Gives one patient a fresh deterioration in their outcome measure while their
+ * adherence stays acceptable. Without it the demo only ever exercises the
+ * "stopped doing the work" failure mode, and the more interesting one — doing
+ * everything and getting worse anyway — is never visible.
+ */
+function spikeRecentOutcome(state: AppState, patientId: string) {
+  const program = state.programs.find((p) => p.patientId === patientId);
+  if (!program) return;
+  const key = program.primaryMetric.key;
+  const worse = program.primaryMetric.higherIsBetter ? -1 : 1;
+
+  const recent = state.readings
+    .filter((r) => r.patientId === patientId && r.key === key)
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .slice(-2);
+
+  for (const [i, r] of recent.entries()) {
+    const shift = worse * (key === 'rom' ? 22 : 3) * (i === recent.length - 1 ? 1 : 0.6);
+    r.value = Math.round(r.value + shift);
+    const log = state.logs.find(
+      (l) => l.patientId === patientId && l.date === r.date && l.value !== undefined,
+    );
+    if (log) log.value = r.value;
+  }
+}

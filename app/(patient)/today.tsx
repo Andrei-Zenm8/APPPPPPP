@@ -1,6 +1,6 @@
 import { useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
-import { Modal, Platform, Pressable, View } from 'react-native';
+import { Pressable, View } from 'react-native';
 import { formatDay, formatDateTime, relativeDay, today as todayISO } from '../../src/domain/date';
 import {
   adherenceSeries,
@@ -9,13 +9,14 @@ import {
   programFor,
   tasksForDay,
 } from '../../src/domain/selectors';
-import type { TaskInstance } from '../../src/domain/types';
+import { SKIP_REASONS, type SkipReason, type TaskInstance } from '../../src/domain/types';
 import { useCurrentPatient, useStore } from '../../src/store';
 import { radius, space, useTheme } from '../../src/theme';
 import { Button, Card, Divider, Pill, Row, Screen, SectionHeader, Spacer, Stack, T } from '../../src/ui';
 import { ProgressRing } from '../../src/ui/charts';
 import { Icon } from '../../src/ui/icons';
 import { ScalePicker } from '../../src/ui/ScalePicker';
+import { Sheet } from '../../src/ui/Sheet';
 import { TaskRow } from '../../src/ui/TaskRow';
 
 const GROUPS = [
@@ -26,12 +27,13 @@ const GROUPS = [
 ] as const;
 
 export default function TodayScreen() {
-  const { state, toggleTask, recordMeasurement } = useStore();
+  const { state, toggleTask, recordMeasurement, skipTask } = useStore();
   const patient = useCurrentPatient();
   const router = useRouter();
   const { colors } = useTheme();
   const date = todayISO();
   const [measuring, setMeasuring] = useState<TaskInstance | null>(null);
+  const [skipping, setSkipping] = useState<TaskInstance | null>(null);
 
   const tasks = useMemo(() => tasksForDay(state, patient.id, date), [state, patient.id, date]);
   const done = tasks.filter((t) => t.entry?.status === 'done').length;
@@ -182,6 +184,7 @@ export default function TodayScreen() {
                       })
                     }
                     onMeasure={() => setMeasuring(task)}
+                    onSkip={() => setSkipping(task)}
                   />
                 </View>
               ))}
@@ -218,9 +221,34 @@ export default function TodayScreen() {
           setMeasuring(null);
         }}
       />
+
+      <SkipSheet
+        task={skipping}
+        onClose={() => setSkipping(null)}
+        onSubmit={(reason) => {
+          if (!skipping) return;
+          skipTask({
+            patientId: patient.id,
+            prescriptionId: skipping.prescription.id,
+            date,
+            occurrence: skipping.occurrence,
+            reason,
+          });
+          setSkipping(null);
+        }}
+      />
     </Screen>
   );
 }
+
+function greeting(name: string) {
+  const h = new Date().getHours();
+  const first = name.split(' ')[0];
+  if (h < 12) return `Good morning, ${first}`;
+  if (h < 18) return `Good afternoon, ${first}`;
+  return `Good evening, ${first}`;
+}
+
 
 function MeasurementSheet({
   task,
@@ -231,7 +259,6 @@ function MeasurementSheet({
   onClose: () => void;
   onSubmit: (value: number) => void;
 }) {
-  const { colors } = useTheme();
   const [value, setValue] = useState<number | null>(null);
   const metric = task?.prescription.metric;
 
@@ -243,66 +270,86 @@ function MeasurementSheet({
   if (!task || !metric) return null;
 
   return (
-    <Modal visible transparent animationType="slide" onRequestClose={onClose}>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Dismiss"
-        onPress={onClose}
-        style={{ flex: 1, backgroundColor: '#00000066', justifyContent: 'flex-end' }}
-      >
-        <Pressable
-          onPress={(e) => e.stopPropagation()}
-          style={{
-            backgroundColor: colors.surface,
-            borderTopLeftRadius: radius.xl,
-            borderTopRightRadius: radius.xl,
-            padding: space.xl,
-            paddingBottom: Platform.OS === 'ios' ? space.xxxl : space.xl,
-            gap: space.lg,
-            alignSelf: 'center',
-            width: '100%',
-            maxWidth: 560,
-            ...(Platform.OS === 'web' ? { borderBottomLeftRadius: radius.xl, borderBottomRightRadius: radius.xl, marginBottom: space.xl } : {}),
-          }}
-        >
-          <Stack gap={space.xs}>
-            <T variant="title">{task.prescription.title}</T>
-            <T variant="body" tone="muted">
-              {task.prescription.rationale}
-            </T>
-          </Stack>
-
-          <ScalePicker
-            min={metric.min}
-            max={metric.max}
-            value={value}
-            unit={metric.unit}
-            lowLabel={metric.key === 'pain' ? 'No pain' : `${metric.min}${metric.unit}`}
-            highLabel={metric.key === 'pain' ? 'Worst imaginable' : `${metric.max}${metric.unit}`}
-            onChange={setValue}
-          />
-
-          <Row gap={space.sm}>
-            <Button label="Cancel" kind="ghost" onPress={onClose} />
-            <View style={{ flex: 1 }}>
-              <Button
-                label={value === null ? 'Pick a value' : `Log ${value}${metric.unit}`}
-                disabled={value === null}
-                full
-                onPress={() => value !== null && onSubmit(value)}
-              />
-            </View>
-          </Row>
-        </Pressable>
-      </Pressable>
-    </Modal>
+    <Sheet
+      visible
+      onClose={onClose}
+      title={task.prescription.title}
+      subtitle={task.prescription.rationale}
+      footer={
+        <Row gap={space.sm}>
+          <Button label="Cancel" kind="ghost" onPress={onClose} />
+          <View style={{ flex: 1 }}>
+            <Button
+              label={value === null ? 'Pick a value' : `Log ${value}${metric.unit}`}
+              disabled={value === null}
+              full
+              onPress={() => value !== null && onSubmit(value)}
+            />
+          </View>
+        </Row>
+      }
+    >
+      <ScalePicker
+        min={metric.min}
+        max={metric.max}
+        value={value}
+        unit={metric.unit}
+        lowLabel={metric.key === 'pain' ? 'No pain' : `${metric.min}${metric.unit}`}
+        highLabel={metric.key === 'pain' ? 'Worst imaginable' : `${metric.max}${metric.unit}`}
+        onChange={setValue}
+      />
+    </Sheet>
   );
 }
 
-function greeting(name: string) {
-  const h = new Date().getHours();
-  const first = name.split(' ')[0];
-  if (h < 12) return `Good morning, ${first}`;
-  if (h < 18) return `Good afternoon, ${first}`;
-  return `Good evening, ${first}`;
+/**
+ * "I couldn't do this, and here's why."
+ *
+ * The copy matters as much as the mechanism: a patient who is in too much pain
+ * to train must not feel they are confessing to a failure, or they will simply
+ * leave the item unticked and the clinician learns nothing. A recorded reason
+ * is the single most actionable thing this app can send upstream.
+ */
+function SkipSheet({
+  task,
+  onClose,
+  onSubmit,
+}: {
+  task: TaskInstance | null;
+  onClose: () => void;
+  onSubmit: (reason: SkipReason) => void;
+}) {
+  const { colors } = useTheme();
+  if (!task) return null;
+
+  return (
+    <Sheet
+      visible
+      onClose={onClose}
+      title={`Couldn't do ${task.prescription.title.toLowerCase()}?`}
+      subtitle="That is useful information, not a failure. Your specialist sees the reason and can adjust the plan."
+      footer={<Button label="Never mind" kind="ghost" full onPress={onClose} />}
+    >
+      <Stack gap={space.sm}>
+        {SKIP_REASONS.map((r) => (
+          <Pressable
+            key={r.value}
+            accessibilityRole="button"
+            accessibilityLabel={r.label}
+            onPress={() => onSubmit(r.value)}
+            style={({ pressed }) => ({
+              paddingVertical: space.md,
+              paddingHorizontal: space.lg,
+              borderRadius: radius.md,
+              backgroundColor: pressed ? colors.accentSoft : colors.surfaceAlt,
+              minHeight: 48,
+              justifyContent: 'center',
+            })}
+          >
+            <T variant="heading">{r.label}</T>
+          </Pressable>
+        ))}
+      </Stack>
+    </Sheet>
+  );
 }

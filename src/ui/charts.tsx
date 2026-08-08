@@ -1,9 +1,9 @@
 import React, { useMemo, useState } from 'react';
-import { LayoutChangeEvent, Pressable, View } from 'react-native';
+import { LayoutChangeEvent, Platform, Pressable, View } from 'react-native';
 import Svg, { Circle, Defs, G, Line, LinearGradient, Path, Rect, Stop, Text as SvgText } from 'react-native-svg';
-import { formatDay, shortWeekday } from '../domain/date';
-import { smoothedAdherence, type DayAdherence } from '../domain/selectors';
-import type { MetricReading } from '../domain/types';
+import { daysBetween, formatDay, shortWeekday } from '../domain/date';
+import { GOOD_DAY, smoothedAdherence, type DayAdherence } from '../domain/selectors';
+import type { ISODate, MetricReading } from '../domain/types';
 import { radius, space, useTheme } from '../theme';
 import { Row, Stack, T } from './index';
 
@@ -105,16 +105,21 @@ export function AdherenceBars({
       <View onLayout={onLayout} style={{ height }}>
         {width > 0 && (
           <Svg width={width} height={height}>
-            {/* Reference line at the 80% adherence threshold used for triage. */}
-            <Line
-              x1={0}
-              x2={width}
-              y1={plotH * 0.2}
-              y2={plotH * 0.2}
-              stroke={colors.border}
-              strokeWidth={1}
-              strokeDasharray="3 4"
-            />
+            {/* Tracks first, then bars, then the threshold line last — drawn in
+                any other order the 80% reference is painted over by the bar
+                tracks and vanishes on every chart that has data. */}
+            {series.map((d, i) => (
+              <Rect
+                key={`bg-${d.date}`}
+                x={i * (barW + gap)}
+                y={0}
+                width={barW}
+                height={plotH}
+                rx={radius.sm / 2}
+                fill={colors.surfaceAlt}
+              />
+            ))}
+
             {series.map((d, i) => {
               const x = i * (barW + gap);
               const rate = d.rate;
@@ -123,17 +128,7 @@ export function AdherenceBars({
               if (rate === null) {
                 // Nothing was due: a faint tick, never an empty gap that reads
                 // as a missed day.
-                return (
-                  <Rect
-                    key={d.date}
-                    x={x}
-                    y={plotH - 3}
-                    width={barW}
-                    height={3}
-                    rx={1.5}
-                    fill={colors.border}
-                  />
-                );
+                return <Rect key={d.date} x={x} y={plotH - 3} width={barW} height={3} rx={1.5} fill={colors.border} />;
               }
 
               const h = Math.max(3, plotH * rate);
@@ -141,22 +136,40 @@ export function AdherenceBars({
               // neutral progress rather than a miss.
               const open = i === series.length - 1 && rate < 1;
               const fill =
-                rate >= 0.8 ? colors.good : open ? colors.accent : rate >= 0.5 ? colors.warn : colors.bad;
+                rate >= GOOD_DAY ? colors.good : open ? colors.accent : rate >= 0.5 ? colors.warn : colors.bad;
               return (
-                <G key={d.date}>
-                  <Rect x={x} y={0} width={barW} height={plotH} rx={radius.sm / 2} fill={colors.surfaceAlt} />
-                  <Rect
-                    x={x}
-                    y={plotH - h}
-                    width={barW}
-                    height={h}
-                    rx={Math.min(radius.sm / 2, barW / 2)}
-                    fill={fill}
-                    opacity={focus === null || isFocus ? 1 : 0.35}
-                  />
-                </G>
+                <Rect
+                  key={d.date}
+                  x={x}
+                  y={plotH - h}
+                  width={barW}
+                  height={h}
+                  rx={Math.min(radius.sm / 2, barW / 2)}
+                  fill={fill}
+                  opacity={focus === null || isFocus ? 1 : 0.55}
+                />
               );
             })}
+
+            <Line
+              x1={0}
+              x2={width}
+              y1={plotH * (1 - GOOD_DAY)}
+              y2={plotH * (1 - GOOD_DAY)}
+              stroke={colors.ink}
+              strokeOpacity={0.35}
+              strokeWidth={1}
+              strokeDasharray="3 4"
+            />
+            <SvgText
+              x={2}
+              y={plotH * (1 - GOOD_DAY) - 4}
+              fontSize={9}
+              fill={colors.inkFaint}
+            >
+              {`${Math.round(GOOD_DAY * 100)}% target`}
+            </SvgText>
+
             {showLabels &&
               series.map((d, i) => {
                 // Short ranges get weekday initials; longer ones get dates,
@@ -190,6 +203,10 @@ export function AdherenceBars({
                 accessibilityLabel={`${formatDay(d.date)}: ${d.done} of ${d.due} completed`}
                 onPressIn={() => setFocus(i)}
                 onPressOut={() => setFocus(null)}
+                // Bars are only a few pixels wide over a 90-day window, so on
+                // pointer devices hover does the work instead of a tap.
+                onHoverIn={() => setFocus(i)}
+                onHoverOut={() => setFocus(null)}
                 style={{ width: barW, height: plotH }}
               />
             ))}
@@ -198,8 +215,12 @@ export function AdherenceBars({
       </View>
       <T variant="caption" tone="faint">
         {active
-          ? `${formatDay(active.date)} · ${active.done}/${active.due} completed`
-          : 'Hold a bar to see that day'}
+          ? active.due === 0
+            ? `${formatDay(active.date)} · nothing scheduled`
+            : `${formatDay(active.date)} · ${active.done}/${active.due} completed`
+          : Platform.OS === 'web'
+            ? 'Hover a bar to see that day'
+            : 'Hold a bar to see that day'}
       </T>
     </Stack>
   );
@@ -223,9 +244,9 @@ export function MetricChart({
   const { colors } = useTheme();
   const [width, setWidth] = useState(0);
   const padL = 30;
-  const padR = 8;
+  const padR = 10;
   const padT = 10;
-  const padB = 20;
+  const padB = 22;
 
   const geom = useMemo(() => {
     if (!readings.length || !width) return null;
@@ -241,15 +262,26 @@ export function MetricChart({
 
     const plotW = width - padL - padR;
     const plotH = height - padT - padB;
-    const x = (i: number) => padL + (readings.length === 1 ? plotW / 2 : (i / (readings.length - 1)) * plotW);
+
+    // Position by *date*, not by index. Measurements taken every third day, or
+    // logged irregularly because the patient missed some, would otherwise be
+    // drawn evenly spaced — which quietly misrepresents how fast the outcome
+    // actually moved.
+    const first = readings[0].date;
+    const last = readings[readings.length - 1].date;
+    const totalDays = Math.max(1, daysBetween(first, last));
+    const x = (d: ISODate) =>
+      padL + (readings.length === 1 ? plotW / 2 : (daysBetween(first, d) / totalDays) * plotW);
     const y = (v: number) => padT + plotH - ((v - min) / (max - min)) * plotH;
 
-    const line = readings.map((r, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(r.value).toFixed(1)}`).join(' ');
-    const area = `${line} L${x(readings.length - 1).toFixed(1)},${(padT + plotH).toFixed(1)} L${x(0).toFixed(1)},${(
+    const line = readings
+      .map((r, i) => `${i === 0 ? 'M' : 'L'}${x(r.date).toFixed(1)},${y(r.value).toFixed(1)}`)
+      .join(' ');
+    const area = `${line} L${x(last).toFixed(1)},${(padT + plotH).toFixed(1)} L${x(first).toFixed(1)},${(
       padT + plotH
     ).toFixed(1)} Z`;
 
-    return { x, y, line, area, min, max, plotH, plotW };
+    return { x, y, line, area, min, max, plotH, plotW, first, last };
   }, [readings, width, height, target]);
 
   const last = readings[readings.length - 1];
@@ -312,9 +344,23 @@ export function MetricChart({
             strokeLinecap="round"
             fill="none"
           />
+          {/* Date ticks, so a gap in the line reads as a gap in time. */}
+          {[geom.first, geom.last].map((d, i) => (
+            <SvgText
+              key={d}
+              x={geom.x(d)}
+              y={height - 5}
+              fontSize={9}
+              fill={colors.inkFaint}
+              textAnchor={i === 0 ? 'start' : 'end'}
+            >
+              {monthDay(d)}
+            </SvgText>
+          ))}
+
           {last && (
             <Circle
-              cx={geom.x(readings.length - 1)}
+              cx={geom.x(last.date)}
               cy={geom.y(last.value)}
               r={4.5}
               fill={strokeColor}

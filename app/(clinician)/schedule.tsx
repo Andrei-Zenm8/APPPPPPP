@@ -2,9 +2,12 @@ import React, { useMemo, useState } from 'react';
 import { View } from 'react-native';
 import { formatDay, formatTime, relativeDay } from '../../src/domain/date';
 import { patientsOf, upcomingAppointments } from '../../src/domain/selectors';
+import type { Appointment } from '../../src/domain/types';
 import { useStore } from '../../src/store';
 import { radius, space, useTheme } from '../../src/theme';
-import { Avatar, Button, Card, EmptyState, Pill, Row, Screen, SectionHeader, Segmented, Spacer, Stack, T } from '../../src/ui';
+import { Avatar, Button, Card, EmptyState, Row, Screen, SectionHeader, Segmented, Spacer, Stack, T } from '../../src/ui';
+import { Input } from '../../src/ui/PrescriptionForm';
+import { Confirm } from '../../src/ui/Sheet';
 import { Icon } from '../../src/ui/icons';
 
 /** Clinician's diary. Grouped by day, because "what does Tuesday look like"
@@ -13,6 +16,7 @@ export default function ScheduleScreen() {
   const { state, addAppointment, cancelAppointment } = useStore();
   const { colors } = useTheme();
   const [adding, setAdding] = useState(false);
+  const [cancelling, setCancelling] = useState<string | null>(null);
 
   const appointments = upcomingAppointments(state, { clinicianId: state.currentClinicianId });
   const patients = patientsOf(state, state.currentClinicianId);
@@ -39,18 +43,9 @@ export default function ScheduleScreen() {
           <Spacer h={space.lg} />
           <NewVisitForm
             patients={patients}
-            onCreate={(patientId, daysAhead, hour) => {
-              const d = new Date();
-              d.setDate(d.getDate() + daysAhead);
-              d.setHours(hour, 0, 0, 0);
-              addAppointment({
-                patientId,
-                clinicianId: state.currentClinicianId,
-                startsAt: d.toISOString(),
-                durationMin: 30,
-                location: 'Northside Rehab · Room 1',
-                kind: 'in-person',
-              });
+            existing={appointments}
+            onCreate={(draft) => {
+              addAppointment({ ...draft, clinicianId: state.currentClinicianId });
               setAdding(false);
             }}
           />
@@ -93,7 +88,7 @@ export default function ScheduleScreen() {
                           </T>
                         )}
                         <View style={{ alignSelf: 'flex-start', marginTop: space.xs }}>
-                          <Button label="Cancel visit" kind="danger" onPress={() => cancelAppointment(a.id)} />
+                          <Button label="Cancel visit" kind="danger" onPress={() => setCancelling(a.id)} />
                         </View>
                       </Stack>
                       <Icon name={a.kind === 'video' ? 'video' : 'pin'} size={18} color={colors.inkFaint} />
@@ -105,26 +100,66 @@ export default function ScheduleScreen() {
           </View>
         ))
       )}
+      <Confirm
+        visible={cancelling !== null}
+        title="Cancel this visit?"
+        body="The patient sees the cancellation on their Visits screen. You will need to book a replacement separately."
+        confirmLabel="Cancel visit"
+        onCancel={() => setCancelling(null)}
+        onConfirm={() => {
+          if (cancelling) cancelAppointment(cancelling);
+          setCancelling(null);
+        }}
+      />
+
       <View style={{ height: space.xl }} />
     </Screen>
   );
 }
 
-/** Deliberately three taps: patient, day, hour. A full date-time picker is a
- *  native-module dependency that behaves differently on every platform, and
- *  booking inside two weeks covers almost every real scheduling action. */
+/**
+ * Booking a visit.
+ *
+ * A full date-time picker is a native-module dependency that looks and behaves
+ * differently on every platform Apol targets, so this is a set of explicit
+ * choices instead — and every one of them starts unselected-but-visible, so the
+ * form can never book a time the clinician did not actually pick.
+ */
 function NewVisitForm({
   patients,
+  existing,
   onCreate,
 }: {
   patients: ReturnType<typeof patientsOf>;
-  onCreate: (patientId: string, daysAhead: number, hour: number) => void;
+  existing: Appointment[];
+  onCreate: (draft: Omit<Appointment, 'id' | 'status' | 'clinicianId'>) => void;
 }) {
   const [patientId, setPatientId] = useState(patients[0]?.id ?? '');
   const [days, setDays] = useState(1);
-  const [hour, setHour] = useState(10);
+  const [hour, setHour] = useState(9);
+  const [kind, setKind] = useState<Appointment['kind']>('in-person');
+  const [durationMin, setDuration] = useState(30);
+  const [note, setNote] = useState('');
+  const { colors } = useTheme();
 
   if (!patients.length) return <EmptyState title="No patients" body="Add a patient before booking a visit." />;
+
+  const startsAt = (() => {
+    const d = new Date();
+    d.setDate(d.getDate() + days);
+    d.setHours(hour, 0, 0, 0);
+    return d;
+  })();
+
+  // Overlap check against the clinician's own diary. Double-booking is the one
+  // scheduling mistake that reliably wastes two people's time.
+  const startMs = startsAt.getTime();
+  const endMs = startMs + durationMin * 60_000;
+  const clash = existing.find((a) => {
+    const s = new Date(a.startsAt).getTime();
+    return startMs < s + a.durationMin * 60_000 && s < endMs;
+  });
+  const clashPatient = clash ? patients.find((p) => p.id === clash.patientId)?.name : null;
 
   return (
     <Card>
@@ -178,7 +213,69 @@ function NewVisitForm({
           />
         </Stack>
 
-        <Button label="Book visit" full onPress={() => onCreate(patientId, days, hour)} />
+        <Stack gap={space.sm}>
+          <T variant="caption" tone="faint">
+            TYPE
+          </T>
+          <Segmented
+            options={[
+              { value: 'in-person', label: 'In person' },
+              { value: 'video', label: 'Video' },
+              { value: 'phone', label: 'Phone' },
+            ]}
+            value={kind}
+            onChange={setKind}
+          />
+        </Stack>
+
+        <Stack gap={space.sm}>
+          <T variant="caption" tone="faint">
+            LENGTH
+          </T>
+          <Segmented
+            options={[
+              { value: '15', label: '15 min' },
+              { value: '30', label: '30 min' },
+              { value: '45', label: '45 min' },
+              { value: '60', label: '60 min' },
+            ]}
+            value={String(durationMin)}
+            onChange={(v) => setDuration(Number(v))}
+          />
+        </Stack>
+
+        <Stack gap={space.sm}>
+          <T variant="caption" tone="faint">
+            NOTE FOR THE PATIENT (OPTIONAL)
+          </T>
+          <Input value={note} onChangeText={setNote} placeholder="Bring shorts — we are re-measuring extension." />
+        </Stack>
+
+        {clash && (
+          <View style={{ padding: space.md, borderRadius: radius.md, backgroundColor: colors.warnSoft }}>
+            <T variant="body" tone="warn">
+              {`That slot overlaps an existing visit${clashPatient ? ` with ${clashPatient}` : ''} at ${formatTime(
+                clash.startsAt,
+              )}.`}
+            </T>
+          </View>
+        )}
+
+        <Button
+          label={clash ? 'Book anyway' : 'Book visit'}
+          kind={clash ? 'secondary' : 'primary'}
+          full
+          onPress={() =>
+            onCreate({
+              patientId,
+              startsAt: startsAt.toISOString(),
+              durationMin,
+              kind,
+              location: kind === 'in-person' ? 'Northside Rehab · Room 1' : kind === 'video' ? 'Video call' : 'Phone call',
+              note: note.trim() || undefined,
+            })
+          }
+        />
       </Stack>
     </Card>
   );

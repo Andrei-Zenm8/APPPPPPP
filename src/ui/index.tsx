@@ -271,7 +271,7 @@ export function Segmented<V extends string>({
               borderRadius: radius.pill,
               alignItems: 'center',
               backgroundColor: active ? colors.surface : 'transparent',
-              minHeight: 36,
+              minHeight: 44,
               justifyContent: 'center',
             }}
           >

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Platform, Pressable, StyleSheet, View } from 'react-native';
-import type { TaskInstance } from '../domain/types';
+import { SKIP_REASONS, type TaskInstance } from '../domain/types';
 import { radius, space, useTheme } from '../theme';
 import { Divider, Pill, Row, Stack, T } from './index';
 import { Icon } from './icons';
@@ -23,16 +23,21 @@ export function TaskRow({
   task,
   onToggle,
   onMeasure,
+  onSkip,
 }: {
   task: TaskInstance;
   onToggle: () => void;
   onMeasure?: () => void;
+  /** Opens the "couldn't do this" flow. */
+  onSkip?: () => void;
 }) {
   const { colors } = useTheme();
   const [expanded, setExpanded] = useState(false);
   const done = task.entry?.status === 'done';
+  const skipped = task.entry?.status === 'skipped';
   const rx = task.prescription;
   const isMeasurement = rx.kind === 'measurement';
+  const skipLabel = SKIP_REASONS.find((r) => r.value === task.entry?.skipReason)?.label;
 
   const primaryAction = isMeasurement && !done && onMeasure ? onMeasure : onToggle;
 
@@ -51,8 +56,8 @@ export function TaskRow({
               height: 28,
               borderRadius: 9,
               borderWidth: done ? 0 : 1.8,
-              borderColor: colors.borderStrong,
-              backgroundColor: done ? colors.accent : 'transparent',
+              borderColor: skipped ? colors.warn : colors.borderStrong,
+              backgroundColor: done ? colors.accent : skipped ? colors.warnSoft : 'transparent',
               alignItems: 'center',
               justifyContent: 'center',
               marginTop: 1,
@@ -90,16 +95,16 @@ export function TaskRow({
             <T variant="caption" tone="faint">
               {KIND_LABEL[rx.kind] ?? rx.kind}
             </T>
-            {isMeasurement &&
-              (task.entry?.value !== undefined ? (
-                <T variant="caption" tone="accent">
-                  {`logged ${task.entry.value}${rx.metric?.unit ?? ''}`}
-                </T>
-              ) : (
-                <T variant="caption" tone="accent">
-                  Tap to log
-                </T>
-              ))}
+            {isMeasurement && task.entry?.value !== undefined && (
+              <T variant="caption" tone="accent">
+                {`logged ${task.entry.value}${rx.metric?.unit ?? ''}`}
+              </T>
+            )}
+            {skipped && (
+              <T variant="caption" tone="warn">
+                {skipLabel ?? 'Skipped'}
+              </T>
+            )}
             <Pressable
               onPress={() => setExpanded((e) => !e)}
               accessibilityRole="button"
@@ -110,6 +115,22 @@ export function TaskRow({
                 {expanded ? 'Hide reason' : 'Why?'}
               </T>
             </Pressable>
+
+            {/* An honest "I couldn't" is worth more to the clinician than a
+                silent miss — so it is a visible, one-tap option, not a
+                hidden gesture, and it is never framed as failure. */}
+            {!done && !skipped && onSkip && (
+              <Pressable
+                onPress={onSkip}
+                accessibilityRole="button"
+                accessibilityLabel={`I couldn't do ${rx.title}`}
+                hitSlop={8}
+              >
+                <T variant="caption" tone="muted">
+                  Couldn't
+                </T>
+              </Pressable>
+            )}
           </Row>
 
           {expanded && (

@@ -6,13 +6,17 @@ import {
   adherenceRate,
   adherenceSeries,
   currentStreak,
+  isImproving,
   metricTrend,
   nextAppointment,
+  outcomeAlarm,
   programFor,
   readingsFor,
   riskLevel,
   tasksForDay,
+  unreadCount,
 } from '../../../src/domain/selectors';
+import { SKIP_REASONS } from '../../../src/domain/types';
 import { useStore } from '../../../src/store';
 import { radius, space, useTheme } from '../../../src/theme';
 import {
@@ -34,23 +38,30 @@ import { AdherenceBars, MetricChart } from '../../../src/ui/charts';
 import { Icon } from '../../../src/ui/icons';
 import { describeSchedule } from '../../(patient)/program';
 import { AppointmentCard } from '../../(patient)/visits';
+import { PrescriptionForm } from '../../../src/ui/PrescriptionForm';
+import { MessageThread } from '../../../src/ui/MessageThread';
+import { Confirm } from '../../../src/ui/Sheet';
 
 const TABS = [
   { value: 'overview', label: 'Overview' },
   { value: 'plan', label: 'Plan' },
   { value: 'log', label: 'Log' },
+  { value: 'messages', label: 'Messages' },
 ] as const;
 
 /** The chart view: everything a specialist needs before a 30-minute visit,
  *  arranged so it can be skimmed in the corridor on a phone. */
 export default function PatientDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { state, removePrescription } = useStore();
+  const { state, addPrescription, discontinuePrescription } = useStore();
   const router = useRouter();
   const { colors } = useTheme();
-  const [tab, setTab] = useState<'overview' | 'plan' | 'log'>('overview');
+  const [tab, setTab] = useState<'overview' | 'plan' | 'log' | 'messages'>('overview');
+  const [adding, setAdding] = useState(false);
+  const [discontinuing, setDiscontinuing] = useState<string | null>(null);
 
   const patient = state.patients.find((p) => p.id === id);
+  const unread = patient ? unreadCount(state, patient.id, 'clinician') : 0;
   const program = patient ? programFor(state, patient.id) : undefined;
 
   const data = useMemo(() => {
@@ -64,6 +75,9 @@ export default function PatientDetail() {
       streak: currentStreak(state, patient.id),
       risk: riskLevel(state, patient.id),
       readings: program ? readingsFor(state, patient.id, program.primaryMetric.key) : [],
+      alarm: program
+        ? outcomeAlarm(readingsFor(state, patient.id, program.primaryMetric.key), program.primaryMetric.higherIsBetter)
+        : null,
       next: nextAppointment(state, patient.id),
     };
   }, [state, patient, program]);
@@ -78,7 +92,7 @@ export default function PatientDetail() {
   }
 
   const trend = metricTrend(data.readings);
-  const improving = trend && program ? (program.primaryMetric.higherIsBetter ? trend.delta > 0 : trend.delta < 0) : null;
+  const improving = program ? isImproving(trend, program.primaryMetric.higherIsBetter) : null;
   const scripts = program ? state.prescriptions.filter((p) => p.programId === program.id) : [];
 
   return (
@@ -115,6 +129,7 @@ export default function PatientDetail() {
               tone={data.risk === 'on-track' ? 'good' : data.risk === 'slipping' ? 'warn' : 'bad'}
             />
             <Pill label={`Since ${formatDay(patient.startedOn)}`} />
+            {unread > 0 && <Pill label={`${unread} unread`} tone="accent" />}
           </Row>
         </Stack>
       </Row>
@@ -158,12 +173,13 @@ export default function PatientDetail() {
                       {trend && (
                         <Stack gap={2} style={{ alignItems: 'flex-end' }}>
                           <T variant="heading" tone={improving ? 'good' : 'warn'}>
-                            {trend.delta > 0 ? '+' : ''}
-                            {trend.delta.toFixed(1)}
+                            {trend.recentDelta > 0 ? '+' : ''}
+                            {trend.recentDelta.toFixed(1)}
                             {program.primaryMetric.unit}
                           </T>
                           <T variant="caption" tone="faint">
-                            since program start
+                            recent · {trend.delta > 0 ? '+' : ''}
+                            {trend.delta.toFixed(1)} overall
                           </T>
                         </Stack>
                       )}
@@ -183,7 +199,7 @@ export default function PatientDetail() {
           <SectionHeader title="Clinical read" />
           <Card>
             <T variant="body" tone="muted">
-              {clinicalRead(data.rate7, data.rate30, improving)}
+              {clinicalRead(data.rate7, data.rate30, improving, data.alarm, program?.primaryMetric.label)}
             </T>
           </Card>
 
@@ -198,7 +214,10 @@ export default function PatientDetail() {
 
       {tab === 'plan' && (
         <>
-          <SectionHeader title={program?.title ?? 'Program'} />
+          <SectionHeader
+            title={program?.title ?? 'Program'}
+            action={program ? <Button label="Add item" onPress={() => setAdding(true)} /> : undefined}
+          />
           {scripts.length === 0 ? (
             <EmptyState title="No prescriptions" body="This program has no items yet." />
           ) : (
@@ -216,9 +235,15 @@ export default function PatientDetail() {
                     <T variant="body" tone="muted" style={{ marginTop: space.xs }}>
                       {rx.rationale}
                     </T>
-                    <View style={{ marginTop: space.sm, alignSelf: 'flex-start' }}>
-                      <Button label="Remove" kind="danger" onPress={() => removePrescription(rx.id)} />
-                    </View>
+                    {rx.endedOn ? (
+                      <View style={{ marginTop: space.sm, alignSelf: 'flex-start' }}>
+                        <Pill label={`Discontinued ${formatDay(rx.endedOn)}`} tone="warn" />
+                      </View>
+                    ) : (
+                      <View style={{ marginTop: space.sm, alignSelf: 'flex-start' }}>
+                        <Button label="Discontinue" kind="danger" onPress={() => setDiscontinuing(rx.id)} />
+                      </View>
+                    )}
                   </Stack>
                   {i < scripts.length - 1 && <Divider />}
                 </View>
@@ -229,6 +254,34 @@ export default function PatientDetail() {
       )}
 
       {tab === 'log' && <DayLog patientId={patient.id} />}
+
+      {tab === 'messages' && (
+        <>
+          <SectionHeader title="Thread" />
+          <MessageThread patientId={patient.id} role="clinician" />
+        </>
+      )}
+
+      {program && (
+        <PrescriptionForm
+          visible={adding}
+          programId={program.id}
+          onClose={() => setAdding(false)}
+          onCreate={addPrescription}
+        />
+      )}
+
+      <Confirm
+        visible={discontinuing !== null}
+        title="Discontinue this item?"
+        body="It stops appearing on the patient's list from today. Everything they have already logged against it is kept, so past adherence stays accurate."
+        confirmLabel="Discontinue"
+        onCancel={() => setDiscontinuing(null)}
+        onConfirm={() => {
+          if (discontinuing) discontinuePrescription(discontinuing);
+          setDiscontinuing(null);
+        }}
+      />
 
       <View style={{ height: space.xl }} />
     </Screen>
@@ -250,21 +303,27 @@ function DayLog({ patientId }: { patientId: string }) {
           const tasks = tasksForDay(state, patientId, date);
           if (!tasks.length) return null;
           const done = tasks.filter((t) => t.entry?.status === 'done').length;
+          // Today is still in progress. Grading it, or calling its outstanding
+          // items "missed", contradicts how every other surface treats an open
+          // day — and would have the clinician chasing a patient at 9am.
+          const isToday = date === today();
           return (
             <Card key={date}>
               <Row style={{ justifyContent: 'space-between', marginBottom: space.sm }}>
                 <T variant="heading">
                   {formatDay(date)}
-                  {date === today() ? ' · today' : ''}
+                  {isToday ? ' · today' : ''}
                 </T>
                 <Pill
                   label={`${done}/${tasks.length}`}
-                  tone={done === tasks.length ? 'good' : done > 0 ? 'warn' : 'bad'}
+                  tone={isToday ? 'accent' : done === tasks.length ? 'good' : done > 0 ? 'warn' : 'bad'}
                 />
               </Row>
               <Stack gap={space.xs}>
                 {tasks.map((t) => {
                   const ok = t.entry?.status === 'done';
+                  const skipped = t.entry?.status === 'skipped';
+                  const reason = SKIP_REASONS.find((r) => r.value === t.entry?.skipReason)?.label;
                   return (
                     <Row key={t.key} gap={space.sm}>
                       <View
@@ -272,7 +331,13 @@ function DayLog({ patientId }: { patientId: string }) {
                           width: 6,
                           height: 6,
                           borderRadius: 3,
-                          backgroundColor: ok ? colors.good : colors.badSoft,
+                          backgroundColor: ok
+                            ? colors.good
+                            : skipped
+                              ? colors.warn
+                              : isToday
+                                ? colors.border
+                                : colors.bad,
                         }}
                       />
                       <T variant="body" tone={ok ? 'muted' : 'faint'} style={{ flex: 1 }}>
@@ -284,7 +349,12 @@ function DayLog({ patientId }: { patientId: string }) {
                           {t.prescription.metric?.unit}
                         </T>
                       )}
-                      {!ok && <T variant="caption" tone="faint">missed</T>}
+                      {/* A reason the patient gave is the point of this screen —
+                          it turns "missed" into something a clinician can act on. */}
+                      {skipped && <T variant="caption" tone="warn">{reason ?? 'skipped'}</T>}
+                      {!ok && !skipped && (
+                        <T variant="caption" tone="faint">{isToday ? 'not yet' : 'missed'}</T>
+                      )}
                     </Row>
                   );
                 })}
@@ -317,7 +387,24 @@ const toneFor = (r: number | null) => (r === null ? 'muted' : r >= 0.8 ? 'good' 
 /** Turns two numbers into the sentence a clinician would actually write in
  *  their notes — including the case where the plan, not the patient, is the
  *  problem. */
-function clinicalRead(week: number | null, month: number | null, improving: boolean | null): string {
+function clinicalRead(
+  week: number | null,
+  month: number | null,
+  improving: boolean | null,
+  alarm: { worseBy: number } | null,
+  metricLabel?: string,
+): string {
+  // A deterioration outranks everything else on this screen. A patient who is
+  // doing the work and getting worse is the one the caseload ranking is most
+  // likely to have hidden, and the one who most needs a call.
+  if (alarm) {
+    const adhering = week !== null && week >= 0.8;
+    return `${metricLabel ?? 'The outcome measure'} has worsened by ${alarm.worseBy.toFixed(1)} against this patient's recent baseline${
+      adhering
+        ? ', while adherence has stayed high. Doing the work and getting worse points at the prescription, a flare, or the diagnosis — review before the next scheduled visit.'
+        : ', alongside dropping adherence. Establish which came first: pain that stopped the program, or a program that stopped and let symptoms return.'
+    }`;
+  }
   if (week === null || month === null) return 'No adherence data recorded yet for this patient.';
   const falling = week < month - 0.12;
   const rising = week > month + 0.12;

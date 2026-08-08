@@ -22,7 +22,8 @@ export type IconName =
   | 'video'
   | 'pin'
   | 'settings'
-  | 'flame';
+  | 'flame'
+  | 'message';
 
 interface Props {
   name: IconName;
@@ -100,6 +101,13 @@ export function Icon({ name, size = 22, color, filled = false }: Props) {
             {...common}
           />
         </>
+      )}
+      {name === 'message' && (
+        <Path
+          d="M20.5 11.5c0 3.9-3.8 7-8.5 7-.9 0-1.8-.1-2.6-.3L4.5 20l1.2-3.4A6.6 6.6 0 0 1 3.5 11.5c0-3.9 3.8-7 8.5-7s8.5 3.1 8.5 7z"
+          {...common}
+          fill={soft}
+        />
       )}
       {name === 'flame' && (
         <Path

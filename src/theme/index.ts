@@ -6,6 +6,11 @@ import { Platform, useColorScheme } from 'react-native';
  * The palette is intentionally low-chroma: clinicians read this screen many
  * times a day, and adherence data should be the only thing that carries
  * saturation. Colour is reserved for state (on-track / slipping / missed).
+ *
+ * Every foreground token clears WCAG AA (4.5:1) against the surface it is used
+ * on, at the small sizes it is actually used at — `inkFaint` carries section
+ * headers and chart axis labels, and `warn` sits on `warnSoft` inside pills,
+ * so both are darker than they would be if chosen by eye.
  */
 
 const palette = {
@@ -17,13 +22,13 @@ const palette = {
     borderStrong: '#C7D0DB',
     ink: '#0E1726',
     inkMuted: '#5B6879',
-    inkFaint: '#8B96A5',
+    inkFaint: '#6B7686',
     accent: '#0E7C7B',
     accentInk: '#FFFFFF',
     accentSoft: '#DCEFEE',
     good: '#1B7F5A',
     goodSoft: '#DCF0E7',
-    warn: '#B5761A',
+    warn: '#8A5810',
     warnSoft: '#FBEEDA',
     bad: '#B33A3A',
     badSoft: '#FADEDE',
@@ -37,7 +42,7 @@ const palette = {
     borderStrong: '#33425642',
     ink: '#EAF0F7',
     inkMuted: '#9AA8B8',
-    inkFaint: '#6C7A8B',
+    inkFaint: '#8996A8',
     accent: '#3EB8B4',
     accentInk: '#05201F',
     accentSoft: '#123230',

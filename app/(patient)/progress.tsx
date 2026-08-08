@@ -4,9 +4,13 @@ import {
   adherenceRate,
   adherenceSeries,
   currentStreak,
+  GOOD_DAY,
+  isImproving,
   metricTrend,
+  outcomeAlarm,
   programFor,
   readingsFor,
+  readingsInWindow,
 } from '../../src/domain/selectors';
 import { useCurrentPatient, useStore } from '../../src/store';
 import { space, useTheme } from '../../src/theme';
@@ -34,13 +38,18 @@ export default function ProgressScreen() {
   const streak = currentStreak(state, patient.id);
 
   const readings = useMemo(
-    () => (program ? readingsFor(state, patient.id, program.primaryMetric.key).slice(-days) : []),
+    () =>
+      program ? readingsInWindow(readingsFor(state, patient.id, program.primaryMetric.key), days) : [],
     [state, patient.id, program, days],
   );
   const trend = metricTrend(readings);
-  const improving = trend && program ? (program.primaryMetric.higherIsBetter ? trend.delta > 0 : trend.delta < 0) : null;
+  const improving = program ? isImproving(trend, program.primaryMetric.higherIsBetter) : null;
 
-  const totalDone = series.reduce((s, d) => s + d.done, 0);
+  // Days cleared, not raw item count: a bare "153 items" changes meaning with
+  // the window and gives the patient nothing to aim at.
+  const worsening = program ? !!outcomeAlarm(readings, program.primaryMetric.higherIsBetter) : false;
+  const goodDays = series.filter((d) => d.rate !== null && d.rate >= GOOD_DAY).length;
+  const scoredDays = series.filter((d) => d.rate !== null).length;
 
   return (
     <Screen>
@@ -55,7 +64,7 @@ export default function ProgressScreen() {
           rate === null ? 'muted' : rate >= 0.8 ? 'good' : rate >= 0.5 ? 'warn' : 'bad'
         } />
         <Stat label="Current streak" value={`${streak}d`} tone="default" />
-        <Stat label="Items done" value={`${totalDone}`} tone="default" />
+        <Stat label={`Days at ${Math.round(GOOD_DAY * 100)}%+`} value={`${goodDays}/${scoredDays}`} tone="default" />
       </Row>
 
       <SectionHeader title={`Daily completion · last ${days} days`} />
@@ -86,12 +95,12 @@ export default function ProgressScreen() {
                   {trend && (
                     <Stack gap={2} style={{ alignItems: 'flex-end' }}>
                       <T variant="heading" tone={improving ? 'good' : 'warn'}>
-                        {trend.delta > 0 ? '+' : ''}
-                        {trend.delta.toFixed(1)}
+                        {trend.recentDelta > 0 ? '+' : ''}
+                        {trend.recentDelta.toFixed(1)}
                         {program.primaryMetric.unit}
                       </T>
                       <T variant="caption" tone="faint">
-                        {improving ? 'improving' : 'not improving yet'}
+                        {improving ? 'improving lately' : 'worse lately'}
                       </T>
                     </Stack>
                   )}
@@ -111,7 +120,7 @@ export default function ProgressScreen() {
       <SectionHeader title="What this means" />
       <Card>
         <T variant="body" tone="muted">
-          {narrative(rate, improving)}
+          {narrative(rate, improving, worsening)}
         </T>
       </Card>
     </Screen>
@@ -146,7 +155,14 @@ function EmptyStateInline() {
 
 /** Plain-language interpretation. Percentages alone do not change behaviour;
  *  a sentence that names the next action does. */
-function narrative(rate: number | null, improving: boolean | null): string {
+function narrative(rate: number | null, improving: boolean | null, worsening: boolean): string {
+  // Never congratulate someone whose numbers have just got worse. Cheerful copy
+  // over a bad week is how an app loses a patient's trust permanently.
+  if (worsening) {
+    return rate !== null && rate >= 0.8
+      ? 'Your numbers have moved the wrong way recently even though you have kept up with the program. That is worth telling your specialist — when the work is being done and the result still slips, it is usually the plan that needs changing, not you.'
+      : 'Your numbers have moved the wrong way recently. Log what you can and tell your specialist what has changed — a flare, a busy week, a new symptom. The sooner they know, the smaller the adjustment needs to be.';
+  }
   if (rate === null) return 'Once you start logging, this is where your story shows up.';
   if (rate >= 0.9 && improving) return 'Excellent adherence and your numbers are moving the right way. Keep doing exactly this — bring this screen to your next visit.';
   if (rate >= 0.9) return 'Your adherence is excellent. The outcome has not shifted much yet, which is worth raising with your specialist — the program may need adjusting rather than more effort from you.';

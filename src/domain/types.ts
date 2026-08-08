@@ -64,6 +64,10 @@ export interface Prescription {
   schedule: Schedule;
   /** For 'measurement' prescriptions: what the patient records. */
   metric?: { key: string; label: string; unit: string; min: number; max: number };
+  /** Date the clinician stopped prescribing this. Discontinuing sets a date
+   *  rather than deleting the row, so past adherence stays truthful — deleting
+   *  a prescription would silently rewrite every week the patient did do it. */
+  endedOn?: ISODate;
 }
 
 export interface Program {
@@ -77,6 +81,19 @@ export interface Program {
   primaryMetric: { key: string; label: string; unit: string; target?: number; higherIsBetter: boolean };
 }
 
+/** Fixed set, because free text alone is unanalysable across a caseload —
+ *  the note field carries the specifics. */
+export type SkipReason = 'pain' | 'no-time' | 'no-equipment' | 'forgot' | 'unwell' | 'other';
+
+export const SKIP_REASONS: { value: SkipReason; label: string }[] = [
+  { value: 'pain', label: 'Too painful' },
+  { value: 'no-time', label: 'No time' },
+  { value: 'no-equipment', label: "Didn't have what I need" },
+  { value: 'unwell', label: 'Felt unwell' },
+  { value: 'forgot', label: 'Forgot' },
+  { value: 'other', label: 'Something else' },
+];
+
 export interface LogEntry {
   id: string;
   patientId: string;
@@ -85,6 +102,9 @@ export interface LogEntry {
   /** Index within the day for multi-dose prescriptions (0-based). */
   occurrence: number;
   status: 'done' | 'skipped';
+  /** Why a skipped task was skipped. The most clinically useful field in the
+   *  whole schema: "missed" is noise, "couldn't — too painful" is a finding. */
+  skipReason?: SkipReason;
   /** Recorded value for measurement prescriptions. */
   value?: number;
   note?: string;
@@ -121,6 +141,29 @@ export interface TaskInstance {
   entry?: LogEntry;
 }
 
+/** A message between a patient and their clinician. Deliberately scoped to a
+ *  single thread per patient: a specialist with forty patients needs one
+ *  inbox, not forty conversations to name and find. */
+export interface Message {
+  id: string;
+  patientId: string;
+  from: Role;
+  body: string;
+  sentAt: ISODateTime;
+  readByClinician: boolean;
+  readByPatient: boolean;
+}
+
+export interface ReminderSettings {
+  enabled: boolean;
+  /** Local 24h hour for each bucket's nudge. */
+  morning: number;
+  midday: number;
+  evening: number;
+  /** Hours before an appointment to remind. */
+  appointmentLeadHours: number;
+}
+
 export interface AppState {
   role: Role;
   clinicians: Clinician[];
@@ -130,6 +173,8 @@ export interface AppState {
   logs: LogEntry[];
   readings: MetricReading[];
   appointments: Appointment[];
+  messages: Message[];
+  reminders: ReminderSettings;
   /** Who is signed in on the patient side / selected on the clinician side. */
   currentPatientId: string;
   currentClinicianId: string;
