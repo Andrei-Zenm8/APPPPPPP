@@ -51,7 +51,11 @@ export function ProgressRing({
   return (
     <View style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}>
       <Svg width={size} height={size} style={{ position: 'absolute' }}>
-        <G rotation={-90} origin={`${size / 2}, ${size / 2}`}>
+        {/* A plain SVG transform rather than rotation + origin: on web,
+            react-native-svg turns either `origin` or `originX`/`originY` into a
+            `transform-origin` DOM attribute, which React rejects as invalid and
+            surfaces as a red error overlay over the whole app in dev. */}
+        <G transform={`rotate(-90, ${size / 2}, ${size / 2})`}>
           <Circle cx={size / 2} cy={size / 2} r={r} stroke={colors.surfaceAlt} strokeWidth={stroke} fill="none" />
           {/* A round cap on a zero-length arc still paints a dot, which reads
               as progress that has not happened. */}
