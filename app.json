@@ -1,0 +1,38 @@
+{
+  "expo": {
+    "name": "Apol",
+    "slug": "apol",
+    "version": "1.0.0",
+    "orientation": "default",
+    "icon": "./assets/icon.png",
+    "scheme": "apol",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0E7C7B"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.apol.tracker"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0E7C7B"
+      },
+      "edgeToEdgeEnabled": true,
+      "package": "com.apol.tracker"
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "static",
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": ["expo-router"],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
