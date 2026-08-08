@@ -23,9 +23,9 @@ Both roles are in the build. Open **Settings** (gear icon, top right) to switch 
 
 ## The two sides
 
-**Patient** — `Today` lists only what is due right now, grouped by time of day, each item one tap from done and carrying the specialist's own reason for prescribing it. `Program` is the full plan. `Progress` is the patient's own evidence that the work is paying off. `Visits` is the appointment they would otherwise miss.
+**Patient** — `Today` lists only what is due right now, grouped by time of day, each item one tap from done and carrying the specialist's own reason for prescribing it. Anything they cannot do can be logged as *"couldn't, and here's why"* rather than left as a silent gap. `Program` is the full plan. `Progress` is their own evidence that the work is paying off. `Visits` is the appointment they would otherwise miss. `Messages` is the way back to their specialist.
 
-**Clinician** — `Caseload` ranks patients by 7-day adherence risk rather than alphabetically, so the list answers *who needs me today* in about three seconds. The patient chart carries adherence bars, the outcome measure plotted against its target, a day-by-day log, and a plain-language clinical read. `Schedule` is the diary.
+**Clinician** — `Caseload` ranks patients by risk rather than alphabetically, so the list answers *who needs me today* in about three seconds. The patient chart carries adherence bars, the outcome measure plotted against its target, a day-by-day log with the patient's own reasons, a message thread, and a plain-language clinical read. `Plan` is where programs are authored. `Schedule` is the diary.
 
 ## How it is built
 
@@ -39,9 +39,11 @@ src/ui/                 primitives, charts, icons, responsive shell
 src/theme/              design tokens (light + dark)
 ```
 
-Two design decisions carry most of the weight:
+Three design decisions carry most of the weight:
 
 **Everything is derived.** Only two things are recorded: the prescriptions a clinician wrote, and the log entries a patient produced. Adherence, streaks, risk level and outcome trends are all computed from those on read (`src/domain/selectors.ts`), never stored. History cannot drift out of sync with what the patient actually did, and the persisted shape stays small enough to swap for a real backend without touching the screens.
+
+**Risk is not just adherence.** A patient doing everything asked of them whose pain has just spiked is the most urgent person on a caseload, and a pure-adherence ranking buries them at the bottom. So a deterioration in the outcome measure escalates a patient independently, and every row states which of the two put it there.
 
 **Charts and icons are drawn by hand** in `react-native-svg` rather than pulled from a charting library or an icon font. It is the only approach that renders identically on iOS, Android, web and desktop, and it keeps the visualisations inside the same design system as everything else. Adherence always uses a full 0–100% axis; colour only ever encodes state, never series identity.
 
@@ -55,8 +57,9 @@ A first run seeds one clinic, three patients and six weeks of deterministic hist
 
 The honest list, in the order it would matter:
 
-- **Backend and accounts.** Multi-device sync, real auth, and the audit trail that any clinical record needs.
-- **Notifications.** Scheduled reminders per prescription and before appointments — the single biggest adherence lever still missing.
-- **Program authoring.** Clinicians can currently remove prescriptions but not compose a program in-app.
-- **Messaging** between patient and specialist.
+- **Backend and accounts.** Multi-device sync, real auth, and the audit trail any clinical record needs. Everything currently lives on the device.
+- **Onboarding a patient.** Programs can be authored, but the patient records themselves are seeded.
+- **Appointment lifecycle.** No attendance or no-show state, no reschedule requests, no join link on a video visit.
 - **Compliance.** HIPAA/GDPR posture, encryption at rest, data export and deletion.
+
+Reminders are implemented with `expo-notifications` and work on device; they are inert in a browser, and the Settings screen says so rather than offering a switch that does nothing.
