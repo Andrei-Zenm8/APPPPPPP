@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Pressable, TextInput, View } from 'react-native';
-import type { Prescription, PrescriptionKind, Schedule } from '../domain/types';
+import type { Prescription, PrescriptionKind, Program, Schedule } from '../domain/types';
 import { radius, space, type as typeScale, useTheme } from '../theme';
 import { Button, Row, Segmented, Spacer, Stack, T } from './index';
 import { Sheet } from './Sheet';
@@ -10,6 +10,16 @@ const KINDS: { value: PrescriptionKind; label: string }[] = [
   { value: 'medication', label: 'Medication' },
   { value: 'supplement', label: 'Supplement' },
   { value: 'habit', label: 'Habit' },
+  { value: 'measurement', label: 'Check-in' },
+];
+
+/** Presets for the common patient-reported outcomes, so the usual case is one
+ *  tap and the unusual case is still editable. */
+const METRIC_PRESETS = [
+  { key: 'pain', label: 'Pain', unit: '/10', min: 0, max: 10, higherIsBetter: false, target: 2 },
+  { key: 'rom', label: 'Range of motion', unit: '°', min: 0, max: 180, higherIsBetter: true, target: 160 },
+  { key: 'mood', label: 'Mood', unit: '/10', min: 0, max: 10, higherIsBetter: true, target: 7 },
+  { key: 'fatigue', label: 'Fatigue', unit: '/10', min: 0, max: 10, higherIsBetter: false, target: 3 },
 ];
 
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -31,7 +41,10 @@ export function PrescriptionForm({
   visible: boolean;
   programId: string;
   onClose: () => void;
-  onCreate: (rx: Omit<Prescription, 'id'>) => void;
+  /** The second argument promotes this check-in to the program's primary
+   *  outcome measure — the number every chart and the whole triage ranking is
+   *  built on. A program with no way to author one is only half a product. */
+  onCreate: (rx: Omit<Prescription, 'id'>, primaryMetric?: Program['primaryMetric']) => void;
 }) {
   const [kind, setKind] = useState<PrescriptionKind>('exercise');
   const [title, setTitle] = useState('');
@@ -41,6 +54,9 @@ export function PrescriptionForm({
   const [mode, setMode] = useState<'daily' | 'weekdays'>('daily');
   const [timesPerDay, setTimesPerDay] = useState(1);
   const [days, setDays] = useState<number[]>([1, 3, 5]);
+  const [preset, setPreset] = useState(METRIC_PRESETS[0]);
+  const [metricLabel, setMetricLabel] = useState('');
+  const [target, setTarget] = useState<string>('');
 
   const reset = () => {
     setKind('exercise');
@@ -51,22 +67,52 @@ export function PrescriptionForm({
     setMode('daily');
     setTimesPerDay(1);
     setDays([1, 3, 5]);
+    setPreset(METRIC_PRESETS[0]);
+    setMetricLabel('');
+    setTarget('');
   };
 
-  const valid = title.trim().length > 1 && rationale.trim().length > 4 && (mode === 'daily' || days.length > 0);
+  const isMeasurement = kind === 'measurement';
+  const valid =
+    title.trim().length > 1 &&
+    rationale.trim().length > 4 &&
+    (mode === 'daily' || days.length > 0) &&
+    (!isMeasurement || (metricLabel.trim().length > 1 && Number.isFinite(Number(target || preset.target))));
 
   const submit = () => {
     const schedule: Schedule =
       mode === 'daily' ? { type: 'daily', timesPerDay } : { type: 'weekdays', days: [...days].sort() };
-    onCreate({
-      programId,
-      kind,
-      title: title.trim(),
-      dose: dose.trim() || undefined,
-      rationale: rationale.trim(),
-      timeOfDay,
-      schedule,
-    });
+    const metric = isMeasurement
+      ? {
+          key: preset.key,
+          label: metricLabel.trim(),
+          unit: preset.unit,
+          min: preset.min,
+          max: preset.max,
+        }
+      : undefined;
+
+    onCreate(
+      {
+        programId,
+        kind,
+        title: title.trim(),
+        dose: isMeasurement ? undefined : dose.trim() || undefined,
+        rationale: rationale.trim(),
+        timeOfDay,
+        schedule,
+        metric,
+      },
+      metric
+        ? {
+            key: metric.key,
+            label: metric.label,
+            unit: metric.unit,
+            target: Number(target || preset.target),
+            higherIsBetter: preset.higherIsBetter,
+          }
+        : undefined,
+    );
     reset();
     onClose();
   };
@@ -95,9 +141,44 @@ export function PrescriptionForm({
           <Input value={title} onChangeText={setTitle} placeholder="Terminal knee extension" />
         </Field>
 
-        <Field label="DOSE OR AMOUNT (OPTIONAL)">
-          <Input value={dose} onChangeText={setDose} placeholder="3 × 15, or 500 mg" />
-        </Field>
+        {isMeasurement ? (
+          <>
+            <Field label="WHAT ARE THEY RECORDING">
+              <Segmented
+                options={METRIC_PRESETS.map((m) => ({ value: m.key, label: m.label }))}
+                value={preset.key}
+                onChange={(k) => {
+                  const next = METRIC_PRESETS.find((m) => m.key === k)!;
+                  setPreset(next);
+                  setTarget('');
+                  if (!metricLabel.trim()) setMetricLabel(next.label);
+                }}
+              />
+            </Field>
+            <Field
+              label="NAME IT FOR THIS PATIENT"
+              // '/10' is a suffix on a value, not on a range — "0–10/10 scale"
+              // is not something anyone says.
+              hint={`Recorded on a ${preset.min}–${preset.max}${
+                preset.unit.startsWith('/') ? '' : preset.unit
+              } scale. ${preset.higherIsBetter ? 'Higher is better.' : 'Lower is better.'}`}
+            >
+              <Input value={metricLabel} onChangeText={setMetricLabel} placeholder="Knee pain" />
+            </Field>
+            <Field label="TARGET" hint="Drawn as the goal line on both of your charts.">
+              <Input
+                value={target}
+                onChangeText={setTarget}
+                placeholder={`${preset.target}${preset.unit}`}
+                keyboardType="numeric"
+              />
+            </Field>
+          </>
+        ) : (
+          <Field label="DOSE OR AMOUNT (OPTIONAL)">
+            <Input value={dose} onChangeText={setDose} placeholder="3 × 15, or 500 mg" />
+          </Field>
+        )}
 
         <Field
           label="WHY IT MATTERS"

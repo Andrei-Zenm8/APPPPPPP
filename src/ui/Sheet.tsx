@@ -72,7 +72,9 @@ export function Sheet({
 
           <ScrollView
             keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}
+            // Visible on web: a clipped control at the fold otherwise reads as
+            // broken layout rather than as more content below.
+            showsVerticalScrollIndicator={Platform.OS === 'web'}
             // Breathing room so the last control never sits under the footer.
             contentContainerStyle={{ paddingBottom: space.sm }}
           >
@@ -113,10 +115,12 @@ export function Confirm({
       title={title}
       subtitle={body}
       footer={
+        // The safe choice is the wide, default target; the destructive one is
+        // deliberately the smaller of the two.
         <Row gap={space.sm}>
-          <Button label="Keep it" kind="secondary" onPress={onCancel} />
+          <Button label={confirmLabel} kind="danger" onPress={onConfirm} />
           <View style={{ flex: 1 }}>
-            <Button label={confirmLabel} kind="danger" full onPress={onConfirm} />
+            <Button label="Keep it" full onPress={onCancel} />
           </View>
         </Row>
       }

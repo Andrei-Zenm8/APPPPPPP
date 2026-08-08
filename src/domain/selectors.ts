@@ -71,6 +71,10 @@ export interface DayAdherence {
   date: ISODate;
   due: number;
   done: number;
+  /** Tasks the patient explicitly reported they could not do. Tracked apart
+   *  from silent misses: the two look identical in a completion rate but mean
+   *  opposite things about the patient's engagement. */
+  reportedUnable: number;
   /** null when nothing was due — an empty day is not a failed day. */
   rate: number | null;
 }
@@ -78,11 +82,35 @@ export interface DayAdherence {
 export function adherenceForDay(state: AppState, patientId: string, date: ISODate): DayAdherence {
   const tasks = tasksForDay(state, patientId, date);
   const done = tasks.filter((t) => t.entry?.status === 'done').length;
-  return { date, due: tasks.length, done, rate: tasks.length ? done / tasks.length : null };
+  const reportedUnable = tasks.filter((t) => t.entry?.status === 'skipped').length;
+  return {
+    date,
+    due: tasks.length,
+    done,
+    reportedUnable,
+    // Adherence stays strict: a reported skip is still work that did not
+    // happen, and a clinician reading 90% must be able to trust it means the
+    // program was done. Honesty is credited in the streak instead.
+    rate: tasks.length ? done / tasks.length : null,
+  };
 }
 
 export function adherenceSeries(state: AppState, patientId: string, days: number): DayAdherence[] {
   return lastNDays(days).map((d) => adherenceForDay(state, patientId, d));
+}
+
+/**
+ * The series clipped to the program's own start date.
+ *
+ * A 90-day window on a six-week program would otherwise render seven weeks of
+ * empty pre-treatment bars, which reads as two months of total non-adherence
+ * rather than "this had not started yet".
+ */
+export function adherenceSeriesForChart(state: AppState, patientId: string, days: number): DayAdherence[] {
+  const program = programFor(state, patientId);
+  const series = adherenceSeries(state, patientId, days);
+  if (!program) return series;
+  return series.filter((d) => d.date >= program.startsOn);
 }
 
 /** Mean adherence over a window, ignoring days with nothing due. */
@@ -121,7 +149,12 @@ export function currentStreak(state: AppState, patientId: string): number {
       cursor = addDays(cursor, -1);
       continue;
     }
-    if (day.rate >= GOOD_DAY) {
+    // Reporting "I couldn't" counts towards the streak even though it does not
+    // count towards adherence. The app asks patients to be honest on their
+    // worst days; breaking their streak for doing so would make the honest
+    // answer the expensive one, and they would simply stop answering.
+    const engaged = day.due ? (day.done + day.reportedUnable) / day.due : 1;
+    if (engaged >= GOOD_DAY) {
       streak++;
     } else if (i === 0) {
       // Today is still open: neither credit nor penalty.
@@ -137,6 +170,9 @@ export type RiskLevel = 'on-track' | 'slipping' | 'at-risk';
 
 export interface Triage {
   level: RiskLevel;
+  /** What drove the level, so callers can present the two causes differently
+   *  instead of replacing one signal with the other. */
+  kind: 'adherence' | 'outcome' | 'none';
   /** One short phrase naming *why* this patient is ranked where they are.
    *  A risk badge without a reason just moves the guesswork downstream. */
   reason: string;
@@ -165,14 +201,16 @@ export function triage(state: AppState, patientId: string): Triage {
     const unit = program.primaryMetric.unit;
     return {
       level: 'at-risk',
+      kind: 'outcome',
       reason: `${program.primaryMetric.label} worse by ${alarm.worseBy.toFixed(1)}${unit}`,
     };
   }
 
-  if (week === null) return { level: 'on-track', reason: 'Nothing due yet' };
-  if (week >= GOOD_DAY) return { level: 'on-track', reason: `${Math.round(week * 100)}% this week` };
-  if (week >= 0.5) return { level: 'slipping', reason: `${Math.round(week * 100)}% this week` };
-  return { level: 'at-risk', reason: `Only ${Math.round(week * 100)}% this week` };
+  if (week === null) return { level: 'on-track', kind: 'none', reason: 'Nothing due yet' };
+  const pct = `${Math.round(week * 100)}% this week`;
+  if (week >= GOOD_DAY) return { level: 'on-track', kind: 'adherence', reason: pct };
+  if (week >= 0.5) return { level: 'slipping', kind: 'adherence', reason: pct };
+  return { level: 'at-risk', kind: 'adherence', reason: `Only ${pct}` };
 }
 
 export function riskLevel(state: AppState, patientId: string): RiskLevel {
@@ -204,6 +242,31 @@ export function smoothedAdherence(series: DayAdherence[], window = 7): number[] 
 /** Readings inside the last N *days* — not the last N readings. A metric taken
  *  every third day would otherwise show three weeks of data under a "7 days"
  *  heading. */
+/**
+ * Everything the app says about a patient's outcome measure, computed once
+ * from the full series.
+ *
+ * Trend and alarm must never be derived from whatever chart zoom happens to be
+ * open: doing that made one patient's "recent" change read as nothing at 7
+ * days, −10° at 30 and −15° at 90 on the same afternoon, and left the patient
+ * with no interpretation at all on the same day her clinician was told she was
+ * at risk. The window controls what is *plotted*, nothing else.
+ */
+export function outcomeSummary(state: AppState, patientId: string) {
+  const program = programFor(state, patientId);
+  if (!program) return null;
+  const readings = readingsFor(state, patientId, program.primaryMetric.key);
+  const trend = metricTrend(readings);
+  return {
+    metric: program.primaryMetric,
+    readings,
+    trend,
+    improving: isImproving(trend, program.primaryMetric.higherIsBetter),
+    alarm: outcomeAlarm(readings, program.primaryMetric.higherIsBetter),
+    latest: readings[readings.length - 1],
+  };
+}
+
 export function readingsInWindow(readings: MetricReading[], days: number): MetricReading[] {
   const from = addDays(today(), -(days - 1));
   return readings.filter((r) => r.date >= from);

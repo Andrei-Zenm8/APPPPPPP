@@ -48,6 +48,7 @@ export default function PatientsScreen() {
           patient,
           risk: t.level,
           reason: t.reason,
+          reasonIsOutcome: t.kind === 'outcome',
           weekRate: adherenceRate(week),
           month,
           program: programFor(state, patient.id),
@@ -99,7 +100,7 @@ export default function PatientsScreen() {
         <EmptyState title="No patients yet" body="Patients you onboard will appear here." />
       ) : (
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.md }}>
-          {rows.map(({ patient, risk, reason, month, next, unread }) => (
+          {rows.map(({ patient, risk, reason, reasonIsOutcome, weekRate, month, next, unread }) => (
             <Card
               key={patient.id}
               // Two per row once there is width for it — a desktop caseload as
@@ -126,9 +127,17 @@ export default function PatientsScreen() {
                   <Row gap={space.md} style={{ marginTop: space.xs, flexWrap: 'wrap' }}>
                     {/* Why this patient sits where they do — a risk badge with
                         no reason just moves the guesswork downstream. */}
-                    <T variant="caption" tone={risk === 'on-track' ? 'faint' : 'warn'}>
-                      {reason}
+                    {/* Both numbers: the escalation reason explains the badge,
+                        but a clinician triaging a list still needs the
+                        adherence figure the list claims to rank on. */}
+                    <T variant="caption" tone="faint">
+                      {weekRate === null ? 'No data yet' : `${Math.round(weekRate * 100)}% this week`}
                     </T>
+                    {reasonIsOutcome && (
+                      <T variant="caption" tone="warn">
+                        {reason}
+                      </T>
+                    )}
                     {next && (
                       <T variant="caption" tone="faint">
                         Next visit {relativeDay(next.startsAt.slice(0, 10))}
@@ -138,7 +147,7 @@ export default function PatientsScreen() {
                 </Stack>
 
                 <Stack gap={space.xs} style={{ alignItems: 'flex-end' }}>
-                  <Sparkline series={month} tone={RISK_META[risk].tone} />
+                  <Sparkline series={month} />
                   <Icon name="chevron" size={16} color={colors.inkFaint} />
                 </Stack>
               </Row>

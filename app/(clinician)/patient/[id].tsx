@@ -5,11 +5,10 @@ import { formatDay, lastNDays, today } from '../../../src/domain/date';
 import {
   adherenceRate,
   adherenceSeries,
+  adherenceSeriesForChart,
   currentStreak,
-  isImproving,
-  metricTrend,
+  outcomeSummary,
   nextAppointment,
-  outcomeAlarm,
   programFor,
   readingsFor,
   riskLevel,
@@ -66,7 +65,7 @@ export default function PatientDetail() {
 
   const data = useMemo(() => {
     if (!patient) return null;
-    const month = adherenceSeries(state, patient.id, 30);
+    const month = adherenceSeriesForChart(state, patient.id, 30);
     return {
       month,
       week: adherenceSeries(state, patient.id, 7),
@@ -74,10 +73,8 @@ export default function PatientDetail() {
       rate7: adherenceRate(adherenceSeries(state, patient.id, 7)),
       streak: currentStreak(state, patient.id),
       risk: riskLevel(state, patient.id),
-      readings: program ? readingsFor(state, patient.id, program.primaryMetric.key) : [],
-      alarm: program
-        ? outcomeAlarm(readingsFor(state, patient.id, program.primaryMetric.key), program.primaryMetric.higherIsBetter)
-        : null,
+      outcome: outcomeSummary(state, patient.id),
+      reportedUnable: month.reduce((n, d) => n + d.reportedUnable, 0),
       next: nextAppointment(state, patient.id),
     };
   }, [state, patient, program]);
@@ -91,8 +88,9 @@ export default function PatientDetail() {
     );
   }
 
-  const trend = metricTrend(data.readings);
-  const improving = program ? isImproving(trend, program.primaryMetric.higherIsBetter) : null;
+  const trend = data.outcome?.trend ?? null;
+  const improving = data.outcome?.improving ?? null;
+  const readings = data.outcome?.readings ?? [];
   const scripts = program ? state.prescriptions.filter((p) => p.programId === program.id) : [];
 
   return (
@@ -144,6 +142,7 @@ export default function PatientDetail() {
             <Metric label="Last 7 days" value={pct(data.rate7)} tone={toneFor(data.rate7)} />
             <Metric label="Last 30 days" value={pct(data.rate30)} tone={toneFor(data.rate30)} />
             <Metric label="Streak" value={`${data.streak}d`} tone="default" />
+            <Metric label="Reported unable" value={`${data.reportedUnable}`} tone="default" />
           </Row>
           <Spacer h={space.md} />
           <Card>
@@ -154,7 +153,7 @@ export default function PatientDetail() {
             <>
               <SectionHeader title={program.primaryMetric.label} />
               <Card>
-                {data.readings.length < 2 ? (
+                {readings.length < 2 ? (
                   <T variant="body" tone="muted">
                     Not enough check-ins recorded yet.
                   </T>
@@ -163,7 +162,7 @@ export default function PatientDetail() {
                     <Row style={{ justifyContent: 'space-between' }}>
                       <Stack gap={2}>
                         <T variant="title">
-                          {data.readings[data.readings.length - 1].value}
+                          {readings[readings.length - 1].value}
                           {program.primaryMetric.unit}
                         </T>
                         <T variant="caption" tone="faint">
@@ -185,7 +184,7 @@ export default function PatientDetail() {
                       )}
                     </Row>
                     <MetricChart
-                      readings={data.readings}
+                      readings={readings}
                       unit={program.primaryMetric.unit}
                       target={program.primaryMetric.target}
                       higherIsBetter={program.primaryMetric.higherIsBetter}
@@ -199,7 +198,7 @@ export default function PatientDetail() {
           <SectionHeader title="Clinical read" />
           <Card>
             <T variant="body" tone="muted">
-              {clinicalRead(data.rate7, data.rate30, improving, data.alarm, program?.primaryMetric.label)}
+              {clinicalRead(data.rate7, data.rate30, improving, data.outcome?.alarm ?? null, program?.primaryMetric)}
             </T>
           </Card>
 
@@ -301,7 +300,20 @@ function DayLog({ patientId }: { patientId: string }) {
       <Stack gap={space.md}>
         {days.map((date) => {
           const tasks = tasksForDay(state, patientId, date);
-          if (!tasks.length) return null;
+          // Rest days are shown, not omitted: a missing date is indistinguishable
+          // from missing data, and "nothing was due" is itself an answer.
+          if (!tasks.length) {
+            return (
+              <Card key={date}>
+                <Row style={{ justifyContent: 'space-between' }}>
+                  <T variant="heading" tone="faint">
+                    {formatDay(date)}
+                  </T>
+                  <Pill label="Rest day" />
+                </Row>
+              </Card>
+            );
+          }
           const done = tasks.filter((t) => t.entry?.status === 'done').length;
           // Today is still in progress. Grading it, or calling its outstanding
           // items "missed", contradicts how every other surface treats an open
@@ -316,7 +328,7 @@ function DayLog({ patientId }: { patientId: string }) {
                 </T>
                 <Pill
                   label={`${done}/${tasks.length}`}
-                  tone={isToday ? 'accent' : done === tasks.length ? 'good' : done > 0 ? 'warn' : 'bad'}
+                  tone={isToday ? 'neutral' : done === tasks.length ? 'good' : done > 0 ? 'warn' : 'bad'}
                 />
               </Row>
               <Stack gap={space.xs}>
@@ -392,14 +404,16 @@ function clinicalRead(
   month: number | null,
   improving: boolean | null,
   alarm: { worseBy: number } | null,
-  metricLabel?: string,
+  metric?: { label: string; unit: string },
 ): string {
   // A deterioration outranks everything else on this screen. A patient who is
   // doing the work and getting worse is the one the caseload ranking is most
   // likely to have hidden, and the one who most needs a call.
   if (alarm) {
     const adhering = week !== null && week >= 0.8;
-    return `${metricLabel ?? 'The outcome measure'} has worsened by ${alarm.worseBy.toFixed(1)} against this patient's recent baseline${
+    return `${metric?.label ?? 'The outcome measure'} has worsened by ${alarm.worseBy.toFixed(1)}${
+      metric?.unit ?? ''
+    } against this patient's recent baseline${
       adhering
         ? ', while adherence has stayed high. Doing the work and getting worse points at the prescription, a flare, or the diagnosis — review before the next scheduled visit.'
         : ', alongside dropping adherence. Establish which came first: pain that stopped the program, or a program that stopped and let symptoms return.'

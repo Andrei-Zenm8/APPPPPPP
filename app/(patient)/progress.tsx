@@ -2,14 +2,11 @@ import React, { useMemo, useState } from 'react';
 import { View } from 'react-native';
 import {
   adherenceRate,
-  adherenceSeries,
+  adherenceSeriesForChart,
   currentStreak,
   GOOD_DAY,
-  isImproving,
-  metricTrend,
-  outcomeAlarm,
+  outcomeSummary,
   programFor,
-  readingsFor,
   readingsInWindow,
 } from '../../src/domain/selectors';
 import { useCurrentPatient, useStore } from '../../src/store';
@@ -33,21 +30,21 @@ export default function ProgressScreen() {
 
   const days = Number(window);
   const program = programFor(state, patient.id);
-  const series = useMemo(() => adherenceSeries(state, patient.id, days), [state, patient.id, days]);
+  const series = useMemo(() => adherenceSeriesForChart(state, patient.id, days), [state, patient.id, days]);
   const rate = adherenceRate(series);
   const streak = currentStreak(state, patient.id);
 
-  const readings = useMemo(
-    () =>
-      program ? readingsInWindow(readingsFor(state, patient.id, program.primaryMetric.key), days) : [],
-    [state, patient.id, program, days],
-  );
-  const trend = metricTrend(readings);
-  const improving = program ? isImproving(trend, program.primaryMetric.higherIsBetter) : null;
+  // Interpretation comes from the full history; `days` only selects what is
+  // drawn. Otherwise "recently" would mean something different on each tab —
+  // and on the shortest tab it would mean nothing at all.
+  const outcome = useMemo(() => outcomeSummary(state, patient.id), [state, patient.id]);
+  const plotted = useMemo(() => (outcome ? readingsInWindow(outcome.readings, days) : []), [outcome, days]);
+  const trend = outcome?.trend ?? null;
+  const improving = outcome?.improving ?? null;
+  const worsening = !!outcome?.alarm;
 
   // Days cleared, not raw item count: a bare "153 items" changes meaning with
   // the window and gives the patient nothing to aim at.
-  const worsening = program ? !!outcomeAlarm(readings, program.primaryMetric.higherIsBetter) : false;
   const goodDays = series.filter((d) => d.rate !== null && d.rate >= GOOD_DAY).length;
   const scoredDays = series.filter((d) => d.rate !== null).length;
 
@@ -76,14 +73,14 @@ export default function ProgressScreen() {
         <>
           <SectionHeader title={program.primaryMetric.label} />
           <Card>
-            {readings.length < 2 ? (
+            {plotted.length < 2 ? (
               <EmptyStateInline />
             ) : (
               <Stack gap={space.md}>
                 <Row style={{ justifyContent: 'space-between' }}>
                   <Stack gap={2}>
                     <T variant="hero">
-                      {readings[readings.length - 1].value}
+                      {plotted[plotted.length - 1].value}
                       <T variant="heading" tone="faint">
                         {program.primaryMetric.unit}
                       </T>
@@ -106,7 +103,7 @@ export default function ProgressScreen() {
                   )}
                 </Row>
                 <MetricChart
-                  readings={readings}
+                  readings={plotted}
                   unit={program.primaryMetric.unit}
                   target={program.primaryMetric.target}
                   higherIsBetter={program.primaryMetric.higherIsBetter}

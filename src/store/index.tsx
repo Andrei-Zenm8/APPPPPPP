@@ -8,6 +8,7 @@ import type {
   LogEntry,
   Message,
   Prescription,
+  Program,
   ReminderSettings,
   Role,
   SkipReason,
@@ -58,7 +59,7 @@ interface StoreValue {
     date: ISODate;
     value: number;
   }) => void;
-  addPrescription: (rx: Omit<Prescription, 'id'>) => void;
+  addPrescription: (rx: Omit<Prescription, 'id'>, primaryMetric?: Program['primaryMetric']) => void;
   /** Stops a prescription from today forward without touching its history. */
   discontinuePrescription: (id: string) => void;
   sendMessage: (args: { patientId: string; from: Role; body: string }) => void;
@@ -234,9 +235,17 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           ],
         }));
       },
-      addPrescription: (rx) => {
+      addPrescription: (rx, primaryMetric) => {
         markTouched();
-        setState((p) => ({ ...p, prescriptions: [...p.prescriptions, { ...rx, id: uid('rx') }] }));
+        setState((p) => ({
+          ...p,
+          prescriptions: [...p.prescriptions, { ...rx, id: uid('rx') }],
+          // A newly authored check-in becomes what the program is steering, so
+          // the charts and the triage ranking have something to read.
+          programs: primaryMetric
+            ? p.programs.map((pr) => (pr.id === rx.programId ? { ...pr, primaryMetric } : pr))
+            : p.programs,
+        }));
       },
       discontinuePrescription: (id) => {
         markTouched();

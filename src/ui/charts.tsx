@@ -53,16 +53,20 @@ export function ProgressRing({
       <Svg width={size} height={size} style={{ position: 'absolute' }}>
         <G rotation={-90} origin={`${size / 2}, ${size / 2}`}>
           <Circle cx={size / 2} cy={size / 2} r={r} stroke={colors.surfaceAlt} strokeWidth={stroke} fill="none" />
-          <Circle
-            cx={size / 2}
-            cy={size / 2}
-            r={r}
-            stroke={tone}
-            strokeWidth={stroke}
-            strokeLinecap="round"
-            strokeDasharray={`${c * clamped} ${c}`}
-            fill="none"
-          />
+          {/* A round cap on a zero-length arc still paints a dot, which reads
+              as progress that has not happened. */}
+          {clamped > 0 && (
+            <Circle
+              cx={size / 2}
+              cy={size / 2}
+              r={r}
+              stroke={tone}
+              strokeWidth={stroke}
+              strokeLinecap="round"
+              strokeDasharray={`${c * clamped} ${c}`}
+              fill="none"
+            />
+          )}
         </G>
       </Svg>
       <T variant="heading" style={{ color: tone }}>
@@ -161,14 +165,6 @@ export function AdherenceBars({
               strokeWidth={1}
               strokeDasharray="3 4"
             />
-            <SvgText
-              x={2}
-              y={plotH * (1 - GOOD_DAY) - 4}
-              fontSize={9}
-              fill={colors.inkFaint}
-            >
-              {`${Math.round(GOOD_DAY * 100)}% target`}
-            </SvgText>
 
             {showLabels &&
               series.map((d, i) => {
@@ -217,10 +213,14 @@ export function AdherenceBars({
         {active
           ? active.due === 0
             ? `${formatDay(active.date)} · nothing scheduled`
-            : `${formatDay(active.date)} · ${active.done}/${active.due} completed`
-          : Platform.OS === 'web'
-            ? 'Hover a bar to see that day'
-            : 'Hold a bar to see that day'}
+            : `${formatDay(active.date)} · ${active.done}/${active.due} completed${
+                active.reportedUnable ? ` · ${active.reportedUnable} reported unable` : ''
+              }`
+          : /* The dashed line is explained here rather than labelled in the
+               plot, where bars cut straight through the text. */
+            `Dashed line: ${Math.round(GOOD_DAY * 100)}% target · ${
+              Platform.OS === 'web' ? 'hover' : 'hold'
+            } a bar for that day`}
       </T>
     </Stack>
   );
@@ -376,22 +376,17 @@ export function MetricChart({
 
 /** ————— Compact sparkline for list rows ————— */
 
-export function Sparkline({
-  series,
-  tone,
-  width = 72,
-  height = 24,
-}: {
-  series: DayAdherence[];
-  /** Passed in from the row's risk level so the line can never disagree with
-   *  the badge sitting next to it. */
-  tone: 'good' | 'warn' | 'bad';
-  width?: number;
-  height?: number;
-}) {
+export function Sparkline({ series, width = 72, height = 24 }: { series: DayAdherence[]; width?: number; height?: number }) {
   const { colors } = useTheme();
   const points = smoothedAdherence(series);
   if (points.length < 2) return <View style={{ width, height }} />;
+
+  // Toned by its own data. It used to inherit the row's risk level so it could
+  // never contradict the badge — but risk now also escalates on the outcome
+  // measure, and this line plots adherence, so inheriting made it state
+  // something about adherence that was not true.
+  const mean = points.reduce((a, b) => a + b, 0) / points.length;
+  const tone: 'good' | 'warn' | 'bad' = mean >= GOOD_DAY ? 'good' : mean >= 0.5 ? 'warn' : 'bad';
 
   const pad = 2;
   const step = width / (points.length - 1);
